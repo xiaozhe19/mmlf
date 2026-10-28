@@ -1,0 +1,6 @@
+{
+  "parent": "minecraft:block/cube_all",
+  "textures": {
+    "all": "mmlf_fabric_test:block/demo_block_on"
+  }
+}

@@ -1,0 +1,21 @@
+{
+  "required": true,
+  "minVersion": "0.8",
+  "package": "dev.mmlf.bridge.mixin",
+  "compatibilityLevel": "JAVA_21",
+  "client": [
+    "CameraMixin",
+    "GameRendererMixin",
+    "BlockRenderDispatcherMixin",
+    "MinecraftMixin",
+    "RenderSystemMixin",
+    "GuiItemMixin"
+  ],
+  "injectors": {
+    "defaultRequire": 1
+  },
+  "mixins": [
+    "SoundMixin",
+    "EntityCollisionMixin"
+  ]
+}

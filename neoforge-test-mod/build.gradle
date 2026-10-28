@@ -1,0 +1,4 @@
+plugins { id 'net.neoforged.moddev' version '2.0.78' }
+base { archivesName = 'mmlf-neoforge-test-mod' }
+dependencies { compileOnly project(':common') }
+neoForge { version = neoforge_version; mods { mmlf_neoforge_test { sourceSet sourceSets.main } } }

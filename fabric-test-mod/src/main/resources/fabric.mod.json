@@ -1,0 +1,16 @@
+{
+  "schemaVersion": 1,
+  "id": "mmlf_fabric_test",
+  "version": "0.1.0",
+  "name": "MMLF Fabric Test",
+  "entrypoints": {
+    "main": [
+      "dev.mmlf.fabrictest.FabricTestMod"
+    ]
+  },
+  "depends": {
+    "fabricloader": ">=0.16.10",
+    "minecraft": "~1.21.1",
+    "java": ">=21"
+  }
+}

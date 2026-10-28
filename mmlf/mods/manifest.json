@@ -1,0 +1,29 @@
+[
+  {
+    "version": "Zsfvgzu6",
+    "filename": "mcw-doors-1.1.5-mc1.21.1fabric.jar",
+    "url": "https://cdn.modrinth.com/data/kNxa8z3e/versions/Zsfvgzu6/mcw-doors-1.1.5-mc1.21.1fabric.jar",
+    "sha512": "448606bf83455afe5d45f5d2961b755bac866aa1a8d63a6b16d7e10df57fd7c51e61d9d2a219cc451c7ac13a23f33dc982812d79aa190f94ba470c2cf167bbd5",
+    "loaders": [
+      "fabric"
+    ],
+    "dependencies": [
+      {
+        "version_id": null,
+        "project_id": "P7dR8mSH",
+        "file_name": null,
+        "dependency_type": "required"
+      }
+    ]
+  },
+  {
+    "version": "StnP0RNi",
+    "filename": "mcw-trapdoors-1.1.5-mc1.21.1neoforge.jar",
+    "url": "https://cdn.modrinth.com/data/n2fvCDlM/versions/StnP0RNi/mcw-trapdoors-1.1.5-mc1.21.1neoforge.jar",
+    "sha512": "70721b55802192d678b6fb66619c6e210a49d5e829fc1951c70c27d8ed940c446979e36dd06221c6a35e358e97fb57c22c41ed0b24cd6d03519926b81d58d4b4",
+    "loaders": [
+      "neoforge"
+    ],
+    "dependencies": []
+  }
+]

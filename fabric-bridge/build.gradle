@@ -1,0 +1,35 @@
+plugins { id 'fabric-loom' version '1.8.13' }
+base { archivesName = 'mmlf-fabric-bridge' }
+evaluationDependsOn(':fabric-test-mod')
+dependencies {
+    minecraft "com.mojang:minecraft:${minecraft_version}"
+    mappings loom.officialMojangMappings()
+    modImplementation "net.fabricmc:fabric-loader:${fabric_loader_version}"
+    modImplementation "net.fabricmc.fabric-api:fabric-api:${fabric_api_version}"
+    runtimeOnly files(project(':fabric-test-mod').sourceSets.main.output)
+    include implementation(project(':common'))
+    include implementation('org.java-websocket:Java-WebSocket:1.6.0')
+}
+sourceSets.main.java.srcDir '../bridge-common/src/main/java'
+sourceSets.main.resources.srcDir '../bridge-common/src/main/resources'
+loom {
+    mods {
+        mmlf_bridge { sourceSet sourceSets.main }
+        mmlf_fabric_test { sourceSet project(':fabric-test-mod').sourceSets.main }
+    }
+    runs {
+        client {
+            runDir System.getenv('MMLF_GAME_ROOT') ? project.relativePath(file(System.getenv('MMLF_GAME_ROOT') + '/fabric')) : 'run'
+            programArgs '--width', '1280', '--height', '720'
+            if (System.getenv('MMLF_SESSION')) vmArg "-Dmmlf.session=${System.getenv('MMLF_SESSION')}"
+            vmArg '-Dmmlf.runtime=fabric'
+            vmArg '-Dmmlf.primary=true'
+            vmArg '-Dorg.lwjgl.system.SharedLibraryExtractPath=' + file('run/natives-fabric').absolutePath
+        }
+    }
+}
+
+tasks.named('runClient') { dependsOn ':fabric-test-mod:classes' }
+
+
+

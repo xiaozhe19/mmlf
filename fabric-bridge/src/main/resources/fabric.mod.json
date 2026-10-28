@@ -1,0 +1,21 @@
+{
+  "schemaVersion": 1,
+  "id": "mmlf_bridge",
+  "version": "0.1.0",
+  "name": "MMLF Fabric Bridge",
+  "environment": "client",
+  "entrypoints": {
+    "client": [
+      "dev.mmlf.fabric.FabricBridge"
+    ]
+  },
+  "depends": {
+    "fabricloader": ">=0.16.10",
+    "minecraft": "~1.21.1",
+    "java": ">=21",
+    "fabric-api": "*"
+  },
+  "mixins": [
+    "mmlf.bridge.mixins.json"
+  ]
+}

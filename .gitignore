@@ -1,0 +1,30 @@
+# Gradle / 构建产物
+.gradle/
+**/build/
+**/bin/
+.cache/
+
+# Minecraft 开发运行目录与 MMLF 会话
+**/run/
+runtime/
+
+# 文档与报告不入库
+docs/
+
+# 日志
+*.log
+
+# IDE（ModDevGradle 生成的 launch.json 含本机绝对路径）
+.idea/
+*.iml
+.vscode/
+.classpath
+.project
+.settings/
+
+# 系统文件
+.DS_Store
+Thumbs.db
+
+# 第三方 Mod 由 scripts/fetch-demo-mods.ps1 按 manifest 下载校验，不入库
+mmlf/mods/*.jar

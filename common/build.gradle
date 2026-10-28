@@ -1,0 +1,6 @@
+dependencies {
+    api 'com.google.code.gson:gson:2.10.1'
+    api('org.java-websocket:Java-WebSocket:1.6.0') { exclude group: 'org.slf4j', module: 'slf4j-api' }
+    api 'org.slf4j:slf4j-api:2.0.9'
+    runtimeOnly 'org.slf4j:slf4j-simple:2.0.9'
+}

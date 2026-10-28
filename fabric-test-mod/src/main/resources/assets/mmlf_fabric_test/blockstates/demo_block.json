@@ -1,0 +1,10 @@
+{
+  "variants": {
+    "lit=false": {
+      "model": "mmlf_fabric_test:block/demo_block_off"
+    },
+    "lit=true": {
+      "model": "mmlf_fabric_test:block/demo_block_on"
+    }
+  }
+}
