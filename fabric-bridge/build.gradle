@@ -1,6 +1,8 @@
 plugins { id 'fabric-loom' version '1.8.13' }
+def mmlfRoot = rootDir.absolutePath
 base { archivesName = 'mmlf-fabric-bridge' }
 evaluationDependsOn(':fabric-test-mod')
+evaluationDependsOn(':launcher')
 dependencies {
     minecraft "com.mojang:minecraft:${minecraft_version}"
     mappings loom.officialMojangMappings()
@@ -8,6 +10,8 @@ dependencies {
     modImplementation "net.fabricmc.fabric-api:fabric-api:${fabric_api_version}"
     runtimeOnly files(project(':fabric-test-mod').sourceSets.main.output)
     include implementation(project(':common'))
+    include implementation(project(':coordinator'))
+    include implementation(project(':launcher'))
     include implementation('org.java-websocket:Java-WebSocket:1.6.0')
 }
 sourceSets.main.java.srcDir '../bridge-common/src/main/java'
@@ -23,13 +27,20 @@ loom {
             programArgs '--width', '1280', '--height', '720'
             if (System.getenv('MMLF_SESSION')) vmArg "-Dmmlf.session=${System.getenv('MMLF_SESSION')}"
             vmArg '-Dmmlf.runtime=fabric'
-            vmArg '-Dmmlf.primary=true'
+            vmArg "-Dmmlf.root=${mmlfRoot}"
             vmArg '-Dorg.lwjgl.system.SharedLibraryExtractPath=' + file('run/natives-fabric').absolutePath
         }
     }
 }
 
-tasks.named('runClient') { dependsOn ':fabric-test-mod:classes' }
+// A client started without a session hosts one; its own third-party mods are staged before it starts.
+tasks.register('stageHostMods', JavaExec) {
+    onlyIf { !System.getenv('MMLF_SESSION') }
+    classpath = project(':launcher').sourceSets.main.runtimeClasspath
+    mainClass = 'dev.mmlf.launcher.SessionHost'
+    args rootProject.file('mmlf/mods').absolutePath, 'fabric', file('run/mods').absolutePath
+}
+tasks.named('runClient') { dependsOn ':fabric-test-mod:classes', 'stageHostMods' }
 
 
 

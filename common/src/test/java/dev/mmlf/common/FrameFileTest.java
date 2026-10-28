@@ -23,6 +23,35 @@ class FrameFileTest {
    assertThrows(java.io.IOException.class,()->writer.publish(6,0,1,color,depth));
   }
  }
+ @Test void concurrentWriterNeverYieldsATornFrame() throws Exception {
+  Path file=temp.resolve("torn.bin");
+  int w=256,h=256,n=w*h*4;
+  try(FrameFile writer=new FrameFile(file); FrameFile reader=new FrameFile(file)) {
+   int[] slots=new int[1]; long[] latest=new long[]{0};
+   var stop=new java.util.concurrent.atomic.AtomicBoolean();
+   Thread thread=new Thread(()->{
+    ByteBuffer plane=ByteBuffer.allocateDirect(n);
+    for(long id=1;!stop.get();id++) {
+     byte value=(byte)id; for(int i=0;i<n;i++) plane.put(i,value);
+     try { int slot=writer.publish(id,w,h,plane.duplicate(),plane.duplicate()); synchronized(latest) { latest[0]=id; slots[0]=slot; } }
+     catch(java.io.IOException e) { throw new RuntimeException(e); }
+    }
+   });
+   thread.start();
+   int accepted=0; long until=System.nanoTime()+1_500_000_000L;
+   while(System.nanoTime()<until) {
+    long id; int slot; synchronized(latest) { id=latest[0]; slot=slots[0]; }
+    if(id==0) continue;
+    var pixels=reader.read(new Frame("neo",id,null,slot,w,h,0,true,"opengl-window-depth"));
+    if(pixels==null) continue;
+    accepted++;
+    byte expected=(byte)id;
+    for(int i=0;i<n;i+=97) { assertEquals(expected,pixels.color().get(i),"colour byte "+i+" of frame "+id); assertEquals(expected,pixels.depth().get(i),"depth byte "+i+" of frame "+id); }
+   }
+   stop.set(true); thread.join();
+   assertTrue(accepted>0,"reader never obtained a stable frame");
+  }
+ }
  @Test void capacityCoversMaximisedHighResolutionWindowAndSmallFilesRejectLargeFrames() throws Exception {
   assertTrue(FrameFile.fits(2560,1369,FrameFile.MAX_PIXELS));
   assertTrue(FrameFile.fits(2560,1440,FrameFile.MAX_PIXELS));

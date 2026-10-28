@@ -13,18 +13,28 @@ import java.util.*;
 
 /** Opt-in isolated developer fixture, configured externally; no test mod compatibility logic. */
 public final class DemoScene {
- private static boolean started,prepared,hidden;
+ private static boolean started,prepared,hidden,skipWait;
  private static int testTicks;
+ /** The self-test is written for a remote demo block on +x; when this runtime's remote block is on -x, it is mirrored. */
+ private static int side=1;
+ private static double x(double value) { return side>0?value:1-value; }
+ private static float yaw(float value) { return side>0?value:-value; }
  public record Placement(String runtime,String block,int x,int y,int z,boolean optional) {}
  public record Scene(List<Placement> placements) {}
  public static void tick(Minecraft mc,Session session,String runtime) {
   if(session==null || !Files.isRegularFile(session.root().resolve("scenario.json"))) return;
-  if(prepared && !hidden && runtime.equals("neoforge") && "true".equals(System.getenv("MMLF_HIDE_SECONDARY"))) {
+  if(prepared && !hidden && !BridgeCore.isPrimary() && "true".equals(System.getenv("MMLF_HIDE_SECONDARY"))) {
    org.lwjgl.glfw.GLFW.glfwHideWindow(mc.getWindow().getWindow()); hidden=true;
   }
   mc.options.pauseOnLostFocus=false;
 
   if(!started && mc.screen!=null && mc.screen.getClass().getSimpleName().equals("AccessibilityOnboardingScreen")) mc.setScreen(new net.minecraft.client.gui.screens.TitleScreen());
+  // The primary opens its world only when a background runtime has loaded its own, so both appear together.
+  if(!started && !skipWait && BridgeCore.isPrimary() && mc.level==null && !BridgeCore.remoteWorldReady()) {
+   if(mc.screen instanceof net.minecraft.client.gui.screens.TitleScreen) mc.setScreen(new WaitingScreen(()->{skipWait=true;mc.setScreen(new net.minecraft.client.gui.screens.TitleScreen());}));
+   return;
+  }
+  if(!started && mc.screen instanceof WaitingScreen) mc.setScreen(new net.minecraft.client.gui.screens.TitleScreen());
   if(!started && mc.level==null && mc.screen instanceof net.minecraft.client.gui.screens.TitleScreen) {
    started=true;
    var settings=new LevelSettings("MMLF Demo",GameType.CREATIVE,false,Difficulty.PEACEFUL,true,new GameRules(),WorldDataConfiguration.DEFAULT);
@@ -35,27 +45,31 @@ public final class DemoScene {
    mc.createWorldOpenFlows().createFreshLevel("mmlf-"+System.currentTimeMillis(),settings,new WorldOptions(0L,false,false),
     registries->registries.registryOrThrow(Registries.WORLD_PRESET).getOrThrow(WorldPresets.FLAT).createWorldDimensions(),mc.screen);
   }
-  if(prepared && runtime.equals("fabric") && mc.player!=null && Files.exists(session.root().resolve("self-test"))) {
+  // Background runtimes may join a minute after the primary; the scripted test starts once a remote frame has arrived.
+  if(prepared && BridgeCore.isPrimary() && BridgeCore.remoteLayerReady() && mc.player!=null && Files.exists(session.root().resolve("self-test"))) {
    testTicks++;
-   if(testTicks>=100 && testTicks<=140) { mc.player.setYRot(180f+(testTicks-100)*12.53f/40f); mc.player.setXRot(13.65f); }
+   if(testTicks>=100 && testTicks<=140) { mc.player.setYRot(yaw(180f+(testTicks-100)*12.53f/40f)); mc.player.setXRot(13.65f); }
+   if(testTicks==125) net.minecraft.client.Screenshot.grab(mc.gameDirectory,"mmlf-turning-demo.png",mc.getMainRenderTarget(),message->System.out.println("MMLF screenshot "+message.getString()));
    if(testTicks==120 || testTicks==160) {
     float error=Math.abs(net.minecraft.util.Mth.wrapDegrees(mc.gameRenderer.getMainCamera().getYRot()-mc.player.getYRot()));
     System.out.println("MMLF CAMERA CONTROL SELFTEST yawError="+error+" passed="+(error<2));
    }
    if(testTicks==220) {
     var box=new net.minecraft.world.phys.AABB(0.2,100,0.2,0.8,101.8,0.8);
-    var motion=new net.minecraft.world.phys.Vec3(1,0,0);
+    var motion=new net.minecraft.world.phys.Vec3(side,0,0);
     var shapes=BridgeCore.remoteCollisions(mc.player,box.expandTowards(motion));
     var resolved=net.minecraft.world.entity.Entity.collideBoundingBox(mc.player,motion,box,mc.level,shapes);
-    System.out.println("MMLF COLLISION SELFTEST shapes="+shapes.size()+" dx="+resolved.x+" passed="+(!shapes.isEmpty() && resolved.x<=0.20001));
+    System.out.println("MMLF COLLISION SELFTEST shapes="+shapes.size()+" dx="+resolved.x+" passed="+(!shapes.isEmpty() && Math.abs(resolved.x)<=0.20001));
    }
    if(testTicks==240) net.minecraft.client.Screenshot.grab(mc.gameDirectory,"mmlf-core-demo.png",mc.getMainRenderTarget(),message->System.out.println("MMLF screenshot "+message.getString()));
    if(testTicks==260) {
-    var server=mc.getSingleplayerServer(); server.execute(()->server.getPlayerList().getPlayers().getFirst().connection.teleport(2.5,100,3.5,198.435f,25.68f));
+    var server=mc.getSingleplayerServer(); server.execute(()->server.getPlayerList().getPlayers().getFirst().connection.teleport(x(2.5),100,3.5,yaw(198.435f),25.68f));
    }
    if(testTicks==350) System.out.println("MMLF THIRD PARTY request="+BridgeCore.requestInteraction());
+   // On the mirrored side the remote third-party block is a door, which the use step swung open out of the pick ray.
+   if(testTicks==395 && side<0) System.out.println("MMLF DOOR CLOSE request="+BridgeCore.requestInteraction());
    if(testTicks==400) System.out.println("MMLF PICK SELFTEST request="+BridgeCore.requestInteraction("pick"));
-   if(testTicks==420) {var server=mc.getSingleplayerServer();server.execute(()->server.getPlayerList().getPlayers().getFirst().connection.teleport(2.5,100,3.5,180,40));}
+   if(testTicks==420) {var server=mc.getSingleplayerServer();server.execute(()->server.getPlayerList().getPlayers().getFirst().connection.teleport(x(2.5),100,3.5,yaw(180),40));}
    if(testTicks==460) System.out.println("MMLF REMOTE PLACE SELFTEST request="+BridgeCore.requestInteraction());
    if(testTicks==540) System.out.println("MMLF PARTICLE SELFTEST request="+BridgeCore.requestInteraction("attack"));
    if(testTicks==548) net.minecraft.client.Screenshot.grab(mc.gameDirectory,"mmlf-particle-demo.png",mc.getMainRenderTarget(),message->System.out.println("MMLF screenshot "+message.getString()));
@@ -67,6 +81,7 @@ public final class DemoScene {
    prepared=true;
    try {
     Scene scene=Wire.JSON.fromJson(Files.readString(session.root().resolve("scenario.json")),Scene.class);
+    for(Placement item:scene.placements()) if(!item.runtime().equals(runtime) && item.block().endsWith(":demo_block")) side=item.x()<0?-1:1;
     var server=mc.getSingleplayerServer();
     server.execute(()->{
      var level=server.overworld();

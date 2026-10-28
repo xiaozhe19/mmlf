@@ -180,7 +180,8 @@ public final class VisualLayers {
      MmlfLog.debug("render.icon","native_received",Map.of("owner",remote.get().owner(),"frameId",notice.frame().frameId()));
     }
    }
-   if(icon==null) return false;
+   // The native icon follows the pick by one round trip; until then draw nothing rather than the proxy paper.
+   if(icon==null) return true;
    RenderSystem.enableBlend();RenderSystem.defaultBlendFunc();graphics.blit(icon.id(),x,y,16,16,0F,0F,32,32,32,32);
    return true;
   } catch(Exception e) {MmlfLog.error("render.icon","draw_failed",Map.of("exception",e.toString()));return true;}

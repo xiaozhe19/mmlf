@@ -17,6 +17,7 @@ public abstract class CameraMixin {
  private void mmlf$pose(BlockGetter level,Entity entity,boolean detached,boolean reverse,float partial,CallbackInfo ci) {
   if(BridgeCore.isPrimary()) {BridgeCore.publishCamera((Camera)(Object)this);return;}
   Pose p=BridgeCore.lastRemotePose();
-  if(p!=null) { setPosition(p.x(),p.y(),p.z()); setRotation(p.yaw(),p.pitch()); }
+  // Only the camera is predicted; the player (crosshair ray, interactions) keeps the primary's real rotation.
+  if(p!=null) { float[] r=BridgeCore.predictedRotation(p); setPosition(p.x(),p.y(),p.z()); setRotation(r[0],r[1]); }
  }
 }

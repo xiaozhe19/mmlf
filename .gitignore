@@ -11,8 +11,18 @@ runtime/
 # 文档与报告不入库
 docs/
 
-# 日志
+# AI 助手配置与说明（不参与构建）
+AGENTS.md
+CLAUDE.md
+.claude/
+
+# 日志、崩溃与临时输出
 *.log
+logs/
+crash-reports/
+*.hprof
+out/
+*.tmp
 
 # IDE（ModDevGradle 生成的 launch.json 含本机绝对路径）
 .idea/

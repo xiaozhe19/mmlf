@@ -1,7 +1,11 @@
 plugins { id 'net.neoforged.moddev' version '2.0.78' }
+def mmlfRoot = rootDir.absolutePath
 base { archivesName = 'mmlf-neoforge-bridge' }
 sourceSets.main.java.srcDir '../bridge-common/src/main/java'
 sourceSets.main.java.srcDir '../common/src/main/java'
+sourceSets.main.java.srcDir '../coordinator/src/main/java'
+sourceSets.main.java.srcDir '../launcher/src/main/java'
+evaluationDependsOn(':launcher')
 sourceSets.main.resources.srcDir '../bridge-common/src/main/resources'
 dependencies {
     implementation project(':common')
@@ -17,7 +21,7 @@ neoForge {
             programArguments.addAll '--width', '1280', '--height', '720'
             if (System.getenv('MMLF_SESSION')) systemProperty 'mmlf.session', System.getenv('MMLF_SESSION')
             systemProperty 'mmlf.runtime', 'neoforge'
-            systemProperty 'mmlf.primary', 'false'
+            systemProperty 'mmlf.root', mmlfRoot
             systemProperty 'org.lwjgl.system.SharedLibraryExtractPath', file('run/natives-neoforge').absolutePath
         }
     }
@@ -26,7 +30,14 @@ neoForge {
         mmlf_neoforge_test { sourceSet project(':neoforge-test-mod').sourceSets.main }
     }
 }
-tasks.named('runClient') { dependsOn ':neoforge-test-mod:classes' }
+// A client started without a session hosts one; its own third-party mods are staged before it starts.
+tasks.register('stageHostMods', JavaExec) {
+    onlyIf { !System.getenv('MMLF_SESSION') }
+    classpath = project(':launcher').sourceSets.main.runtimeClasspath
+    mainClass = 'dev.mmlf.launcher.SessionHost'
+    args rootProject.file('mmlf/mods').absolutePath, 'neoforge', file('run/mods').absolutePath
+}
+tasks.named('runClient') { dependsOn ':neoforge-test-mod:classes', 'stageHostMods' }
 
 
 

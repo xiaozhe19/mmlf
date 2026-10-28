@@ -20,6 +20,8 @@ public abstract class MinecraftMixin {
  private void mmlf$attack(org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable<Boolean> ci) { if(BridgeCore.requestInteraction("attack")) ci.setReturnValue(true); }
  @Inject(method="continueAttack",at=@At("HEAD"),cancellable=true)
  private void mmlf$continue(boolean attacking,CallbackInfo ci) { if(attacking && BridgeCore.requestInteraction("attack")) ci.cancel(); }
+ @Inject(method="stop",at=@At("HEAD"))
+ private void mmlf$closing(CallbackInfo ci) { BridgeCore.closing(); }
  @Inject(method="pickBlock",at=@At("HEAD"),cancellable=true)
  private void mmlf$pick(CallbackInfo ci) {if(BridgeCore.requestInteraction("pick")) ci.cancel();}
 }

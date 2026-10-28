@@ -17,7 +17,7 @@ public final class BridgeCore {
     private static volatile Pose lastRemotePose;
     private static Session session;
     private static FrameFile frames;
-    private static long frameSequence,lastWorldCapture;
+
     private static volatile Frame remoteFrame;
     private static Frame displayFrame;
     private static FrameFile.Pixels displayPixels,sparePixels;
@@ -33,7 +33,10 @@ public final class BridgeCore {
     private static final ThreadLocal<Boolean> nativeInteraction=ThreadLocal.withInitial(()->false);
     private static long lastAttack;
     private static String lastHeld="";
-    private static long heldSent,lastResize;
+    private static long heldSent,lastResize,lastLinked;
+    private static boolean everLinked, worldReadySent;
+    /** Runtimes that reported a loaded world; the primary waits for one before opening its own. */
+    private static final java.util.Set<String> readyRuntimes=java.util.concurrent.ConcurrentHashMap.newKeySet();
     public static Session session() {return session;}
     public static String runtimeId() {return link==null?"unknown":link.id;}
 
@@ -76,13 +79,15 @@ public final class BridgeCore {
     private BridgeCore() {}
     public static void initialize(String loader) {
         String sessionPath=System.getProperty("mmlf.session", System.getenv("MMLF_SESSION"));
+        String id=System.getProperty("mmlf.runtime",loader);
         if (sessionPath==null || sessionPath.isBlank()) {
-            System.out.println("MMLF: no session configured; bridge inactive"); return;
+            Path hosted=SessionBootstrap.hostIfRequested(id);
+            if(hosted==null) { System.out.println("MMLF: no session configured; bridge inactive"); return; }
+            sessionPath=hosted.toString();
         }
         try {
             session=Session.read(Path.of(sessionPath));
-            String id=System.getProperty("mmlf.runtime",loader);
-            primary=Boolean.parseBoolean(System.getProperty("mmlf.primary", "false"));
+            primary=id.equals(session.primary());
             link=new RuntimeClient(session,id,loader,primary,BridgeCore::receive);
             BridgeEvents.install((target,event)->link.send("event",target,event));
             RemoteItems.initialize(link,primary);
@@ -99,8 +104,9 @@ public final class BridgeCore {
         } else if(message.type().equals("runtime_joined")) {
             String id=message.data().get("runtime").getAsString(); mc.execute(()->peers.add(id));
         } else if(message.type().equals("runtime_left")) {
-            String id=message.data().get("runtime").getAsString(); mc.execute(()->{peers.remove(id);collisions.values().removeIf(v->v.owner().equals(id));});
+            String id=message.data().get("runtime").getAsString(); readyRuntimes.remove(id); mc.execute(()->{peers.remove(id);collisions.values().removeIf(v->v.owner().equals(id));});
         } else if(message.type().equals("disconnected")) {
+            worldReadySent=false; readyRuntimes.clear();
             mc.execute(()->{peers.clear(); collisions.clear(); localObjects.clear(); remoteFrame=null; displayFrame=null; displayPixels=null; lastRemotePose=null;});
         } else if(message.type().equals("ray_request")) {
             RayRequest request=message.body(RayRequest.class); mc.execute(()->raycast(request));
@@ -108,6 +114,8 @@ public final class BridgeCore {
             Interaction action=message.body(Interaction.class); mc.execute(()->interact(action));
         } else if(message.type().equals("event")) {
             Event event=message.body(Event.class);
+            if(event.topic().equals("mmlf:session_end")) { if(!primary) mc.execute(()->stopBackground(mc,"session_end")); return; }
+            if(event.topic().equals("mmlf:world_ready")) { readyRuntimes.add(message.source()); MmlfLog.info("connection","runtime_world_ready",Map.of("runtime",message.source())); return; }
             if(event.topic().equals("mmlf:visual")) {if(primary) mc.execute(()->VisualLayers.receive(event,message.source()));return;}
             if(event.topic().equals("mmlf:held")) {if(!primary) mc.execute(()->RemoteItems.updateHeld(event.values().get("item")));return;}
             if(event.topic().equals("mmlf:picked")) {RemoteItems.receive(message);return;}
@@ -126,12 +134,24 @@ public final class BridgeCore {
             mc.execute(()->remoteFrame=frame);
         } else if(message.type().equals("pose")) {
             Pose pose=message.body(Pose.class);
-            mc.execute(()->lastRemotePose=pose);
+            mc.execute(()->receivePose(pose));
         }
     }
     public static void tick(Minecraft mc) {
         if(link!=null) DemoScene.tick(mc,session,link.id);
+        if(link!=null && !primary) {
+            // A background runtime has no visible window; it must not outlive the session that started it.
+            long now=System.nanoTime();
+            if(link.ready()) { everLinked=true; lastLinked=now; }
+            else if(everLinked && now-lastLinked>5_000_000_000L) { stopBackground(mc,"session_lost"); return; }
+            if(++hostCheckTick%20==0 && HOST!=null && !HOST.isAlive()) { stopBackground(mc,"host_exited"); return; }
+        }
         if(link==null || !link.ready() || mc.player==null || mc.level==null) return;
+        if(!worldReadySent) { worldReadySent=true; link.send("event","*",new Event("mmlf:world_ready",Map.of())); }
+        // Clouds write depth and move with each runtime's own game time: a background's clouds would drift over the primary's.
+        if(!primary && mc.options.cloudStatus().get()!=net.minecraft.client.CloudStatus.OFF) mc.options.cloudStatus().set(net.minecraft.client.CloudStatus.OFF);
+        // Vsync would hold a background to the monitor's rate regardless of BACKGROUND_FPS.
+        if(!primary && mc.options.enableVsync().get()) { mc.options.enableVsync().set(false); mc.getWindow().updateVsync(false); }
         if (!primary && lastRemotePose!=null && mc.level.dimension().location().toString().equals(lastRemotePose.dimension())) {
             Pose p=lastRemotePose;
             mc.player.setPos(p.playerX(),p.playerY(),p.playerZ());
@@ -183,6 +203,83 @@ public final class BridgeCore {
             }
     }
     public static boolean isPrimary() { return primary; }
+    private static Boolean hiddenBackground;
+    /**
+     * Whether this process is a background runtime whose window should stay hidden. Read straight from the session file,
+     * because the window is created before the bridge initializes.
+     */
+    public static boolean hiddenBackground() {
+        if(hiddenBackground==null) {
+            boolean hidden=false;
+            try {
+                String path=System.getProperty("mmlf.session",System.getenv("MMLF_SESSION"));
+                if(path!=null && "true".equals(System.getenv("MMLF_HIDE_SECONDARY")))
+                    hidden=!Session.read(Path.of(path)).primary().equals(System.getProperty("mmlf.runtime"));
+            } catch(Exception ignored) { }
+            hiddenBackground=hidden;
+        }
+        return hiddenBackground;
+    }
+    /** The process that started this background runtime (session host or launcher), when it told us. */
+    private static final ProcessHandle HOST=hostProcess();
+    private static int hostCheckTick;
+    private static boolean stopping;
+    private static ProcessHandle hostProcess() {
+        try { String pid=System.getenv("MMLF_HOST_PID"); return pid==null?null:ProcessHandle.of(Long.parseLong(pid)).orElse(null); }
+        catch(RuntimeException e) { return null; }
+    }
+    private static void stopBackground(Minecraft mc,String reason) {
+        if(stopping) return; stopping=true;
+        MmlfLog.warn("connection","background_stopping",Map.of("reason",reason));
+        mc.stop();
+    }
+    /** Primary, as its window closes: background runtimes stop now instead of waiting to notice the lost link. */
+    public static void closing() {
+        // Minecraft.stop() runs again on every frame of the closing screen; announce the end once.
+        if(primary && !stopping && link!=null && link.ready()) { stopping=true; link.send("event","*",new Event("mmlf:session_end",Map.of())); MmlfLog.info("connection","session_end_sent",Map.of()); }
+    }
+    /** A background's frame rate; the GTA V passthrough runs its guest uncapped by vsync at 120 for the same reason. */
+    public static final int BACKGROUND_FPS=Integer.getInteger("mmlf.backgroundFps",120);
+    /** How far ahead of the newest primary pose a background renders its camera; about the remote frame's latency. */
+    private static final double POSE_LEAD=Double.parseDouble(System.getProperty("mmlf.poseLeadMs","25"))/1000.0;
+    private static double yawRate,pitchRate;
+    private static long poseArrived;
+    /** Render thread: keeps a smoothed turn rate so a background can aim where the primary will be looking. */
+    private static void receivePose(Pose pose) {
+        long now=System.nanoTime(); Pose previous=lastRemotePose;
+        double dt=(now-poseArrived)/1e9;
+        if(previous!=null && dt>0.002 && dt<0.2) {
+            yawRate+=0.5*(net.minecraft.util.Mth.wrapDegrees(pose.yaw()-previous.yaw())/dt-yawRate);
+            pitchRate+=0.5*((pose.pitch()-previous.pitch())/dt-pitchRate);
+        } else if(dt>=0.2) { yawRate=0; pitchRate=0; }
+        poseArrived=now; lastRemotePose=pose;
+    }
+    /** Background camera rotation {yaw, pitch}: the primary's, extrapolated by its turn rate (at most 30 degrees). */
+    public static float[] predictedRotation(Pose p) {
+        double ahead=(System.nanoTime()-poseArrived)/1e9+POSE_LEAD;
+        double dy=Math.max(-30,Math.min(30,yawRate*ahead)),dp=Math.max(-30,Math.min(30,pitchRate*ahead));
+        return new float[]{(float)(p.yaw()+dy),(float)Math.max(-90,Math.min(90,p.pitch()+dp))};
+    }
+    /** Background view widening (tangent scale) that covers a turn during the remote frame's latency. */
+    public static final double OVERSCAN=Double.parseDouble(System.getProperty("mmlf.overscan","1.25"));
+    /** True once another runtime has a loaded world. */
+    public static boolean remoteWorldReady() { return !readyRuntimes.isEmpty(); }
+    public static int peerCount() { return peers.size(); }
+    /**
+     * Background runtimes, every frame before the crosshair pick: the player stands exactly on the primary player, with
+     * the previous-position fields set too, so the native ray and model are not a tick of interpolation behind.
+     */
+    public static void followPrimaryFrame() {
+        Pose p=lastRemotePose; Minecraft mc=Minecraft.getInstance(); var player=mc.player;
+        if(primary || p==null || player==null || mc.level==null || !mc.level.dimension().location().toString().equals(p.dimension())) return;
+        player.setPos(p.playerX(),p.playerY(),p.playerZ());
+        player.xo=player.xOld=p.playerX(); player.yo=player.yOld=p.playerY(); player.zo=player.zOld=p.playerZ();
+        player.setYRot(p.yaw()); player.setXRot(p.pitch());
+        player.yRotO=p.yaw(); player.xRotO=p.pitch();
+        player.yHeadRot=player.yHeadRotO=p.yaw();
+    }
+    /** True on the primary once a remote world frame has been received; a background runtime's world may load late. */
+    public static boolean remoteLayerReady() { return primary && displayFrame!=null; }
     /** Remote runtimes render at the primary framebuffer size so colour, depth and hand pixels share one projection. */
     private static void matchPrimaryWindow(Minecraft mc,Pose p) {
         var target=mc.getMainRenderTarget();
@@ -339,31 +436,39 @@ public final class BridgeCore {
     }
     public static void captureFrame() {
         metricFrames++;
-        if (primary) { composite(); return; }
-        long captureNow=System.nanoTime();
-        if(captureNow-lastWorldCapture<33_000_000L) return;
-        lastWorldCapture=captureNow;
+        if (primary) { if(CPU_COMPOSITOR) composite(); else gpuComposite(); return; }
         Pose pose=lastRemotePose;
         Minecraft mc=Minecraft.getInstance();
-        if(primary || link==null || !link.ready() || pose==null || mc.level==null) return;
-        if(!mc.level.dimension().location().toString().equals(pose.dimension())) return;
-        int width=mc.getMainRenderTarget().width, height=mc.getMainRenderTarget().height;
-        if(width != pose.width() || height != pose.height()) {MmlfLog.sampled("render.capture","size_mismatch",1000,Map.of("width",width,"height",height,"poseWidth",pose.width(),"poseHeight",pose.height()));return;}
-        if(!FrameFile.fits(width,height,FrameFile.MAX_PIXELS)) return;
-        try (PixelTransfer transfer=new PixelTransfer()) {
+        if(link==null || !link.ready() || pose==null || mc.level==null) return;
+        try {
             if(frames==null) frames=new FrameFile(session.framePath(link.id));
-            int size=Math.multiplyExact(Math.multiplyExact(width,height),4);
-            ensureBuffers(size);
-            java.nio.ByteBuffer color=colorBuffer, depth=depthBuffer;
-            org.lwjgl.opengl.GL11.glReadPixels(0,0,width,height,org.lwjgl.opengl.GL11.GL_RGBA,org.lwjgl.opengl.GL11.GL_UNSIGNED_BYTE,color);
-            org.lwjgl.opengl.GL11.glReadPixels(0,0,width,height,org.lwjgl.opengl.GL11.GL_DEPTH_COMPONENT,org.lwjgl.opengl.GL11.GL_FLOAT,depth);
-            long id=++frameSequence;
-            int slot=frames.publish(id,width,height,color,depth);
-            var nativeCamera=mc.gameRenderer.getMainCamera();
-            MmlfLog.sampled("camera","capture_error",1000,Map.of("positionError",nativeCamera.getPosition().distanceTo(new Vec3(pose.x(),pose.y(),pose.z())),"yawErrorDegrees",net.minecraft.util.Mth.wrapDegrees(nativeCamera.getYRot()-pose.yaw()),"pitchErrorDegrees",nativeCamera.getXRot()-pose.pitch()));
-            MmlfLog.sampled("render.capture","frame",1000,Map.of("frameId",id,"cameraId",pose.cameraId(),"slot",slot,"width",width,"height",height));
-            if(slot>=0) link.send("frame","*",new Frame(link.id,id,pose,slot,width,height,System.nanoTime(),true,"opengl-window-depth",link.coordinatorOffsetNanos));
-        } catch(Exception e) { System.err.println("MMLF frame capture: "+e.getMessage()); }
+            java.util.function.Consumer<Frame> announce=frame->link.send("frame","*",frame);
+            if(!mc.level.dimension().location().toString().equals(pose.dimension())) { FrameExporter.drain(frames,announce,link.id,link.coordinatorOffsetNanos,false); return; }
+            var target=mc.getMainRenderTarget();
+            var camera=mc.gameRenderer.getMainCamera(); Vec3 at=camera.getPosition();
+            // The frame carries the camera it was actually rendered with, so the primary can re-project it exactly.
+            Pose rendered=new Pose(pose.cameraId(),pose.epoch(),pose.dimension(),at.x,at.y,at.z,camera.getYRot(),camera.getXRot(),pose.fov(),target.width,target.height,
+                pose.playerX(),pose.playerY(),pose.playerZ(),
+                new org.joml.Matrix4f().rotation(new org.joml.Quaternionf(camera.rotation()).conjugate()).get(new float[16]),
+                new org.joml.Matrix4f(com.mojang.blaze3d.systems.RenderSystem.getProjectionMatrix()).get(new float[16]));
+            MmlfLog.sampled("camera","capture_error",1000,Map.of("positionError",at.distanceTo(new Vec3(pose.x(),pose.y(),pose.z())),"yawErrorDegrees",net.minecraft.util.Mth.wrapDegrees(camera.getYRot()-pose.yaw()),"pitchErrorDegrees",camera.getXRot()-pose.pitch()));
+            FrameExporter.capture(target,rendered,frames,announce,link.id,link.coordinatorOffsetNanos);
+        } catch(Exception e) { MmlfLog.sampled("render.capture","failed",1000,Map.of("exception",e.toString())); }
+    }
+    /** The previous CPU compositor stays available for comparison: -Dmmlf.compositor=cpu. */
+    private static final boolean CPU_COMPOSITOR="cpu".equalsIgnoreCase(System.getProperty("mmlf.compositor"));
+    /** A remote layer older than this is hidden rather than left frozen on screen. */
+    private static final long STALE_NANOS=1_000_000_000L;
+    private static void gpuComposite() {
+        prepareDisplayFrame();
+        Frame frame=displayFrame; FrameFile.Pixels pixels=displayPixels; Minecraft mc=Minecraft.getInstance();
+        if(frame==null || pixels==null || frame.pose()==null || mc.level==null || link==null) return;
+        if(!mc.level.dimension().location().toString().equals(frame.pose().dimension())) return;
+        double ageNanos=(System.nanoTime()+link.coordinatorOffsetNanos)-(frame.capturedNanos()+frame.coordinatorOffsetNanos());
+        if(ageNanos>STALE_NANOS) { MmlfLog.sampled("render.composite","stale_hidden",1000,Map.of("frameId",frame.frameId(),"ageMs",ageNanos/1e6)); return; }
+        var target=mc.getMainRenderTarget();
+        RemoteCompositor.draw(frame,pixels,mc.gameRenderer.getMainCamera(),target.width,target.height);
+        if(!compositeReported) {compositeReported=true;System.out.println("MMLF COMPOSITE READY remote="+frame.runtime()+" mode=gpu");}
     }
     private static void ensureBuffers(int n) {
         if(colorBuffer==null || colorBuffer.capacity()<n) {

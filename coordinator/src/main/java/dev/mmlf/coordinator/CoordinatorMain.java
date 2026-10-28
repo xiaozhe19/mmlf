@@ -15,7 +15,7 @@ public final class CoordinatorMain {
         Coordinator server=new Coordinator(0,token);
         server.start();
         while(server.getPort()==0) Thread.sleep(20);
-        new Session("ws://127.0.0.1:"+server.getPort(),token,dir.toString()).write(dir.resolve("session.json"));
+        new Session("ws://127.0.0.1:"+server.getPort(),token,dir.toString(),args.length>1?args[1]:"fabric").write(dir.resolve("session.json"));
         Runtime.getRuntime().addShutdownHook(new Thread(() -> { try { server.stop(); } catch(Exception ignored) {} }));
     }
 }
