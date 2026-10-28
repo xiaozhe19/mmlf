@@ -4,7 +4,7 @@
 
 MMLF 希望兼容NeoForge与Fabric，但想要绕开两个ModLoader复杂的相互兼容部分。
 
-每个 ModLoader 运行在独立的 Minecraft 进程里，加载自己的原生 Mod；Coordinator 在进程之间同步相机、玩家、方块状态和交互；主窗口把其他进程渲染出的真实画面（颜色 + 深度）按正确的前后遮挡合成进来。
+所以采取让每个 ModLoader 运行在独立的 Minecraft 进程里，加载自己的原生 Mod；主端通过共享状态发布相机，Coordinator 在进程之间路由方块状态和交互；主窗口把其他进程渲染出的真实画面（颜色 + 深度）按正确的前后遮挡合成进来的办法，实现在游玩体验上的兼容。
 
 > Native Execution, Shared Logical World, Unified Interaction, Composited Rendering.
 
@@ -17,6 +17,8 @@ MMLF 希望兼容NeoForge与Fabric，但想要绕开两个ModLoader复杂的相�
 - 两端测试 Mod 互相发送事件（反向交互）。
 - 玩家会被另一端的方块挡住（碰撞）。
 - 另一端物品的手持模型和快捷栏图标，都是由它所属的那一端原生渲染的。
+- 右键另一端 Mod 的方块会打开它的**原生界面**（如 Farmer's Delight 厨锅），在主窗口中显示并可用鼠标键盘操作；容器界面下方是主窗口玩家自己的物品栏。
+- 另一端 Mod 的物品按原标签页出现在创造模式物品栏中；生存模式下放置、挖掘、捡起都由所属端原生执行，数量与掉落同步回主窗口。
 - **哪一端都能当主窗口**：启动哪个客户端，哪个就是主窗口，另一端在后台自动拉起、隐藏运行，关闭主窗口后几秒内自动退出。
 
 没有复制另一端的资源，没有重新注册另一端的方块，也没有重写另一端的渲染逻辑。画面全部来自各自真实运行的 Minecraft。
@@ -74,22 +76,24 @@ $env:MMLF_SELF_TEST='true'; ./gradlew.bat :neoforge-bridge:runClient
           主端 Runtime（如 Fabric）                        后台 Runtime（如 NeoForge）
    ┌──────────────────────────────┐                ┌──────────────────────────────┐
    │ 原生 Mod + MMLF Bridge       │   WebSocket    │ 原生 Mod + MMLF Bridge       │
-   │  · 玩家输入、相机姿态  ──────┼──► Coordinator ─┼──► 跟随主端相机与玩家       │
+   │  · 玩家输入、相机姿态  ──────┼──► 共享状态 ───┼──► 跟随主端相机与玩家       │
    │  · 射线仲裁、交互路由  ◄─────┼── （对象归属） ◄┼──  方块状态、碰撞形状、事件 │
    │                              │                │                              │
    │  GPU 合成 ◄──── 共享帧文件（颜色+深度+实际渲染姿态）◄──── PBO 异步读回       │
    └──────────────────────────────┘                └──────────────────────────────┘
 ```
 
-- **通信**：Loopback WebSocket，会话令牌握手，心跳和断线检测。每个方块对象有唯一 ID 和所属 Runtime，只有所属端能修改它的权威状态。
-- **帧传输**：后台在世界画完、画手之前，把颜色和深度读进 PBO，不阻塞渲染；GPU 栅栏通过后，用 seqlock 写进三槽共享帧文件。每帧附带后台**实际**渲染时的相机和投影矩阵。
+- **通信**：相机姿态、世界帧和远端手部/图标画面都经本地映射文件传递，主端轮询最新快照；控制与交互采用 Loopback WebSocket，会话令牌握手，心跳和断线检测。每个方块对象有唯一 ID 和所属 Runtime，只有所属端能修改它的权威状态。
+- **帧传输**：后台在世界画完、画手之前，把颜色和深度读进 PBO，不阻塞渲染；GPU 栅栏通过后，用非阻塞槽锁和 CRC 校验写进三槽共享帧文件。每帧的元数据（含后台**实际**渲染时的相机和投影矩阵）写在槽头，主端直接轮询，不经 WebSocket 通知。
 - **合成**：主端在世界画完后画一个全屏三角形，片元着色器写出远端表面在当前相机下的深度，由硬件深度测试和主端自己的深度缓冲比较遮挡。远端帧的姿态和当前相机不一致时，沿视线对数步进加二分，做重投影；遇到被揭开的遮挡区域就丢弃该像素，不产生拖影。
 - **去重**：每一端只渲染自己拥有的方块（在区块构建时过滤）；后台不画云和方块选择框，原版世界只由主端画。
-- **延迟补偿**：后台以 1.25 倍视野渲染，按主端的转动速度预测相机朝向，帧率上限 120。
+- **延迟补偿**：后台以 1.25 倍视野渲染，按源端转动速度和实测延迟预测相机朝向，帧率上限 120。
 - **交互**：主端点击时，向所有 Runtime 发射线查询，Coordinator 选出最近的命中，交给那个方块所属的一端，在它的服务端原生执行。
 - **会话**：`SessionHost` 创建会话目录和 Coordinator，按元数据把 `mmlf/mods/` 里的 JAR 分到对应加载器，再启动各 Runtime。后台窗口从创建起就隐藏；主端退出时广播会话结束，后台还有看门狗检测主端进程。
 
 渲染合成和重投影的思路参考了 [rehan-remade/universal-modder](https://github.com/rehan-remade/universal-modder) 中的 Minecraft × GTA V passthrough 示例（MIT），代码按 Minecraft 1.21.1 的 OpenGL 重新实现。
+
+完整通信、时钟及当前验证限制见 [运行架构说明](docs/ai/runtime-architecture.md)。
 
 ## 项目结构
 
@@ -118,24 +122,28 @@ JVM 系统属性（客户端托管模式下加在 `runClient` 的运行配置里
 |---|---|---|
 | `mmlf.autohost` | `true` | 没有会话时，由本客户端托管会话并拉起另一端 |
 | `mmlf.compositor` | （GPU） | 设为 `cpu` 时使用旧的 CPU 合成，作为对照 |
-| `mmlf.overscan` | `1.25` | 后台视野放宽倍数 |
-| `mmlf.poseLeadMs` | `25` | 后台相机预测的提前量（毫秒） |
+| `mmlf.overscan` | `1.25` | 固定后台视野放宽倍数；自适应模式下作为上限 |
+| `mmlf.adaptiveOverscan` | `false` | 开启实验性动态视野放宽；质量和快速转向效果尚待验证 |
+| `mmlf.poseLeadMs` | `25` | 无有效延迟反馈时后台相机预测的默认提前量（毫秒） |
+| `mmlf.reprojectionDiagnostic` | `false` | 显示重投影诊断颜色，仅供调试 |
 | `mmlf.backgroundFps` | `120` | 后台帧率上限 |
 | `mmlf.selfTest` | `false` | 托管会话时运行自测（也可用环境变量 `MMLF_SELF_TEST=true`） |
 
 ## 日志与排错
 
 - 最新会话目录写在 `runtime/latest-session.txt` 里；会话目录下的 `logs/*.jsonl` 是各端的结构化日志，`clients.log` 或 `<runtime>.log` 是客户端完整输出。
-- 主端每秒记录 `render.composite/gpu_frames`（直接合成帧数、重投影帧数、远端帧龄），后台记录 `render.capture/frame`（读回耗时），各端定时记录 `metrics/runtime`（CPU、内存、FPS、往返时间）。
+- 主端定期记录 `metrics/remote_frame`（估算帧龄和角度差的分位数及校准误差），后台记录 `metrics/capture_latency`；各端定时记录 `metrics/runtime`（CPU、内存、FPS、往返时间）。
 - 构建报 `mappings.jar` "另一个程序正在使用此文件"：通常是 IDE 的 Gradle 守护进程占用了 Loom 缓存。关闭 IDE 或执行 `./gradlew.bat --stop` 后重试。
+
+待办与复现证据见 [TODO](docs/ai/TODO.md)。
 
 ## 已知限制
 
 - **快速转头时，屏幕边缘的远端物体会被裁切**，之后能看到重新出现的过程（未完成）。两个客户端同时渲染时显卡吃紧，后台帧率上不去，远端画面落后约 30–40 ms。
 - 远端透明材质（水、玻璃）按不透明处理，主端的半透明表面会挡住后面的远端物体。
-- 远端交互目前在服务端执行，长按使用物品、远端 Mod 的 GUI 等还不支持。
+- 远端界面已在 Fabric 主窗口 + NeoForge 后台下验证；反向组合与一主两次尚未在真实游戏中验证，详见 [跨 Runtime GUI 报告](docs/ai/result/cross-runtime-gui/README.md)。长按使用物品尚不支持。
 - 只能在开发环境里启动（依赖各 Bridge 的 Gradle 运行任务）。
-- 不支持：跨端物品栏和物品组件、生存模式物品消耗、实体和完整物理同步、Forge 第三端。
+- 不支持：跨端物品的持久化（Phase 3）、实体和完整物理同步、Forge 第三端。远端界面中主窗口独有的物品显示为屏障占位。
 - Macaw's Doors 的门在物品栏里的图标和放置后的门贴图不同，这是 Mod 本身的设计，不是传输错误。
 
 ## 路线

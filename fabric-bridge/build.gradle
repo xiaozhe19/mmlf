@@ -1,5 +1,7 @@
 plugins { id 'fabric-loom' version '1.8.13' }
 def mmlfRoot = rootDir.absolutePath
+def runtimeId = System.getenv('MMLF_RUNTIME_ID') ?: 'fabric'
+if (!(runtimeId ==~ /[a-zA-Z0-9_-]{1,48}/)) throw new GradleException('Invalid MMLF_RUNTIME_ID')
 base { archivesName = 'mmlf-fabric-bridge' }
 evaluationDependsOn(':fabric-test-mod')
 evaluationDependsOn(':launcher')
@@ -23,10 +25,10 @@ loom {
     }
     runs {
         client {
-            runDir System.getenv('MMLF_GAME_ROOT') ? project.relativePath(file(System.getenv('MMLF_GAME_ROOT') + '/fabric')) : 'run'
+            runDir System.getenv('MMLF_GAME_ROOT') ? project.relativePath(file(System.getenv('MMLF_GAME_ROOT') + '/' + runtimeId)) : 'run'
             programArgs '--width', '1280', '--height', '720'
             if (System.getenv('MMLF_SESSION')) vmArg "-Dmmlf.session=${System.getenv('MMLF_SESSION')}"
-            vmArg '-Dmmlf.runtime=fabric'
+            vmArg "-Dmmlf.runtime=${runtimeId}"
             vmArg "-Dmmlf.root=${mmlfRoot}"
             vmArg '-Dorg.lwjgl.system.SharedLibraryExtractPath=' + file('run/natives-fabric').absolutePath
         }

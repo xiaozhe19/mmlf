@@ -19,9 +19,20 @@ public abstract class MinecraftMixin {
  @Inject(method="startAttack",at=@At("HEAD"),cancellable=true)
  private void mmlf$attack(org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable<Boolean> ci) { if(BridgeCore.requestInteraction("attack")) ci.setReturnValue(true); }
  @Inject(method="continueAttack",at=@At("HEAD"),cancellable=true)
- private void mmlf$continue(boolean attacking,CallbackInfo ci) { if(attacking && BridgeCore.requestInteraction("attack")) ci.cancel(); }
+ private void mmlf$continue(boolean attacking,CallbackInfo ci) {
+  // A background's own attack key is never down; its tick would stop the mining the primary is driving.
+  if(BridgeCore.miningForPrimary()) { ci.cancel(); return; }
+  if(!attacking) BridgeCore.attackReleased();
+  if(attacking && BridgeCore.requestInteraction("attack")) ci.cancel();
+ }
  @Inject(method="stop",at=@At("HEAD"))
  private void mmlf$closing(CallbackInfo ci) { BridgeCore.closing(); }
+ /** A hosted screen reports its opening, switching and closing from the place every screen change goes through. */
+ @Inject(method="setScreen",at=@At("TAIL"))
+ private void mmlf$screen(net.minecraft.client.gui.screens.Screen screen,CallbackInfo ci) { dev.mmlf.bridge.GuiHost.screenChanged(((Minecraft)(Object)this).screen); }
+ /** Only the primary pauses: a background showing a pausing screen would otherwise stop its server, and the machines in it. */
+ @org.spongepowered.asm.mixin.injection.Redirect(method="runTick",at=@At(value="INVOKE",target="Lnet/minecraft/client/gui/screens/Screen;isPauseScreen()Z"))
+ private boolean mmlf$pause(net.minecraft.client.gui.screens.Screen screen) { return screen.isPauseScreen() && (BridgeCore.isPrimary() || !BridgeCore.connected()); }
  @Inject(method="pickBlock",at=@At("HEAD"),cancellable=true)
  private void mmlf$pick(CallbackInfo ci) {if(BridgeCore.requestInteraction("pick")) ci.cancel();}
 }

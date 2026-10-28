@@ -1,3 +1,5 @@
 {
-  "block.mmlf_neoforge_test.demo_block": "MMLF Neoforge Demo Block"
+  "block.mmlf_neoforge_test.demo_block": "MMLF Neoforge Demo Block",
+  "block.mmlf_neoforge_test.gui_block": "MMLF Test Screen Block",
+  "block.mmlf_neoforge_test.box_block": "MMLF Test Box"
 }

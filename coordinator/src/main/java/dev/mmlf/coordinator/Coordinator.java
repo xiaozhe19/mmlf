@@ -68,7 +68,10 @@ public final class Coordinator extends WebSocketServer {
                 case "object" -> { ObjectState s=m.body(ObjectState.class); world.update(id,s); MmlfLog.debug("world","object_update",Map.of("owner",id,"objectId",s.id(),"revision",s.revision(),"type",s.type()));relay(c,m); }
                 case "ray_query" -> beginRay(id,m);
                 case "ray_hit" -> collectHit(id,m);
-                case "event", "pose", "frame" -> relay(c,m);
+                case "event" -> relay(c,m);
+                case "interaction_result", "gui" -> { toPrimary(id,m); MmlfLog.debug("gui","relayed",Map.of("type",m.type(),"source",id)); }
+                case "gui_input" -> fromPrimary(id,m);
+                case "inventory" -> { if(id.equals(primary)) fromPrimary(id,m); else toPrimary(id,m); }
                 default -> throw new IllegalArgumentException("unknown message type");
             }
         } catch(RuntimeException e) {
@@ -120,7 +123,21 @@ public final class Coordinator extends WebSocketServer {
         }
         WebSocket target=peers.get(destination);
         MmlfLog.info("interaction","routed",Map.of("actionId",hit.actionId(),"owner",destination,"hitOwner",best.getKey(),"action",p.request.action()==null?"use":p.request.action(),"distance",best.getValue().distance()));
-        if(target!=null) target.send(Wire.of("interaction","coordinator",destination,new Interaction(hit.actionId(),p.request.pose(),routedHit,p.request.action(),p.request.heldItem(),p.request.secondaryUse())).encode());
+        if(target!=null) target.send(Wire.of("interaction","coordinator",destination,new Interaction(hit.actionId(),p.request.pose(),routedHit,p.request.action(),p.request.heldItem(),p.request.secondaryUse(),p.request.hand(),p.request.selectedSlot())).encode());
+    }
+    /** Owner reports about hosted screens and interactions go to the primary only. */
+    private void toPrimary(String source,Wire m) {
+        if(primary==null || source.equals(primary) || !primary.equals(m.target())) throw new IllegalArgumentException("report must target the primary");
+        WebSocket dest=peers.get(primary); if(dest!=null) dest.send(m.encode());
+    }
+    /** Screen input and inventory grants come only from the primary and go to one online owner. */
+    private void fromPrimary(String source,Wire m) {
+        if(!source.equals(primary)) throw new IllegalArgumentException("only primary can control hosted screens");
+        if(m.target()==null || m.target().equals(source)) throw new IllegalArgumentException("invalid target");
+        if(m.target().equals("*")) { peers.forEach((id,p)->{ if(!id.equals(source)) p.send(m.encode()); }); return; }
+        WebSocket dest=peers.get(m.target());
+        if(dest==null) throw new IllegalArgumentException("target runtime offline");
+        dest.send(m.encode());
     }
     private void relay(WebSocket sender, Wire m) {
         if(m.target()==null || m.target().equals("*")) peers.values().stream().filter(p->p!=sender).forEach(p->p.send(m.encode()));

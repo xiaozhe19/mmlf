@@ -11,6 +11,8 @@ public final class NeoForgeTestMod {
  public static final DeferredRegister.Blocks BLOCKS=DeferredRegister.createBlocks("mmlf_neoforge_test");
  public static final DeferredRegister.Items ITEMS=DeferredRegister.createItems("mmlf_neoforge_test");
  public static final DeferredBlock<Block> BLOCK=BLOCKS.register("demo_block",DemoBlock::new);
+ public static final DeferredBlock<Block> GUI_BLOCK=BLOCKS.register("gui_block",GuiBlock::new);
+ public static final DeferredBlock<Block> BOX_BLOCK=BLOCKS.register("box_block",BoxBlock::new);
  public NeoForgeTestMod(IEventBus bus) {
   BLOCKS.register(bus); ITEMS.register(bus);
   dev.mmlf.common.BridgeEvents.subscribe(event->{
@@ -27,5 +29,9 @@ public final class NeoForgeTestMod {
    } catch(RuntimeException ex) {System.err.println("MMLF test event rejected: "+ex.getMessage());}
   });
  }
- static { ITEMS.register("demo_block",()->new BlockItem(BLOCK.get(),new Item.Properties())); }
+ static {
+  ITEMS.register("demo_block",()->new BlockItem(BLOCK.get(),new Item.Properties()));
+  ITEMS.register("gui_block",()->new BlockItem(GUI_BLOCK.get(),new Item.Properties()));
+  ITEMS.register("box_block",()->new BlockItem(BOX_BLOCK.get(),new Item.Properties()));
+ }
 }

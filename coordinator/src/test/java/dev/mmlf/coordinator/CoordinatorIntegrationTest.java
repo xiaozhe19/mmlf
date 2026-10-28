@@ -55,6 +55,40 @@ class CoordinatorIntegrationTest {
    assertEquals(123,clients.get(2).await("pong").body(Ping.class).sent());
   } finally { for(Client c:clients) c.closeBlocking(); server.stop(); }
  }
+ @Test void hostedScreenTrafficOnlyFlowsBetweenPrimaryAndOwner() throws Exception {
+  Coordinator server=new Coordinator(0,"secret"); server.start();
+  for(int i=0;i<200 && server.getPort()==0;i++) Thread.sleep(10);
+  List<Client> clients=new ArrayList<>();
+  try {
+   for(String id:List.of("fabric","neo","forge")) {
+    Client c=new Client(server.getPort()); clients.add(c); assertTrue(c.connectBlocking(5,TimeUnit.SECONDS));
+    c.send(Wire.of("hello",id,"coordinator",new Hello("secret",id,"1.21.1",id.equals("fabric"))).encode());
+    c.await("welcome");
+   }
+   Client primary=clients.get(0),neo=clients.get(1),forge=clients.get(2);
+   var state=new GuiState("g1","a1","neo","ACTIVE","Screen",true,2,854,480,1,null);
+   neo.send(Wire.of("gui","neo","fabric",state).encode());
+   assertEquals("g1",primary.await("gui").body(GuiState.class).instanceId());
+   neo.send(Wire.of("gui","neo","forge",state).encode());
+   assertTrue(neo.await("error").data().get("message").getAsString().contains("primary"));
+   var input=new GuiInput("g1",1,"press",0.5,0.5,0,0,0,-1,-1,0,null,2,854,480,1);
+   primary.send(Wire.of("gui_input","fabric","neo",input).encode());
+   assertEquals(1,neo.await("gui_input").body(GuiInput.class).sequence());
+   forge.send(Wire.of("gui_input","forge","neo",input).encode());
+   assertTrue(forge.await("error").data().get("message").getAsString().contains("only primary"));
+   var grant=new InventorySnapshot("L1","neo",1,0,List.of(),"grant");
+   primary.send(Wire.of("inventory","fabric","neo",grant).encode());
+   assertEquals("L1",neo.await("inventory").body(InventorySnapshot.class).leaseId());
+   neo.send(Wire.of("inventory","neo","fabric",new InventorySnapshot("L1","neo",2,0,List.of(),"return")).encode());
+   assertEquals("return",primary.await("inventory").body(InventorySnapshot.class).reason());
+   neo.send(Wire.of("interaction_result","neo","fabric",new InteractionResult("a1","neo",true,"CONSUME","g1",null)).encode());
+   assertTrue(primary.await("interaction_result").body(InteractionResult.class).success());
+   primary.send(Wire.of("gui_input","fabric","nobody",input).encode());
+   assertTrue(primary.await("error").data().get("message").getAsString().contains("offline"));
+   neo.closeBlocking(); clients.remove(neo);
+   assertEquals("neo",primary.await("runtime_left").data().get("runtime").getAsString());
+  } finally { for(Client c:clients) c.closeBlocking(); server.stop(); }
+ }
  static final class Client extends WebSocketClient {
   final BlockingQueue<Wire> queue=new LinkedBlockingQueue<>();
   Client(int port) { super(URI.create("ws://127.0.0.1:"+port)); }

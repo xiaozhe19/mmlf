@@ -3,7 +3,8 @@ $root = Split-Path -Parent $PSScriptRoot
 $destination = Join-Path $root 'mmlf/mods'
 New-Item -ItemType Directory -Force $destination | Out-Null
 $records = @()
-foreach ($version in @('Zsfvgzu6','StnP0RNi')) {
+# Macaw's Doors (Fabric), Macaw's Trapdoors (NeoForge), Farmer's Delight (NeoForge), Tom's Simple Storage (Fabric)
+foreach ($version in @('Zsfvgzu6','StnP0RNi','XTVZDOol','nhRuPk5W')) {
     $metadata = Invoke-RestMethod -Uri "https://api.modrinth.com/v2/version/$version"
     if ($metadata.game_versions -notcontains '1.21.1') { throw "Not a 1.21.1 release: $version" }
     $file = $metadata.files | Where-Object primary | Select-Object -First 1

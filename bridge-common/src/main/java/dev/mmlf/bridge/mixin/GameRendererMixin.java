@@ -12,11 +12,14 @@ public abstract class GameRendererMixin {
  private void mmlf$capture(DeltaTracker delta,CallbackInfo ci) { BridgeCore.captureFrame(); dev.mmlf.bridge.VisualLayers.beforeHand(); }
  @Inject(method="getFov",at=@At("RETURN"),cancellable=true)
  private void mmlf$fov(net.minecraft.client.Camera camera,float delta,boolean changing,org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable<Double> ci) {
+  if(!changing) return;
+  if(BridgeCore.isPrimary()) {
+   // Preserve Minecraft and loader FOV effects and publish the value used for this world projection.
+   BridgeCore.publishCamera(camera,ci.getReturnValue().floatValue());
+   return;
+  }
   var pose=BridgeCore.renderedPose(); if(pose==null) return;
-  // A background renders the world (not the hand) wider than the primary, so a quick turn still finds remote pixels
-  // at the screen edge; the primary re-projects with the projection the frame was really rendered with.
-  double fov=pose.fov();
-  if(!BridgeCore.isPrimary() && changing) fov=Math.toDegrees(2*Math.atan(Math.tan(Math.toRadians(fov)/2)*BridgeCore.OVERSCAN));
+  double fov=BridgeCore.backgroundFov(pose);
   ci.setReturnValue(fov);
  }
  @Inject(method="pick(F)V",at=@At("HEAD"))

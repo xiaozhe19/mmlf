@@ -19,8 +19,17 @@ public final class DemoScene {
  private static int side=1;
  private static double x(double value) { return side>0?value:1-value; }
  private static float yaw(float value) { return side>0?value:-value; }
- public record Placement(String runtime,String block,int x,int y,int z,boolean optional) {}
+ /** {@code properties} sets block state values by name; {@code items} ("id*count") fills a container block entity. */
+ public record Placement(String runtime,String block,int x,int y,int z,boolean optional,Map<String,String> properties,List<String> items) {}
  public record Scene(List<Placement> placements) {}
+ private static net.minecraft.world.level.block.state.BlockState withProperties(net.minecraft.world.level.block.state.BlockState state,Map<String,String> properties) {
+  if(properties==null) return state;
+  for(var entry:properties.entrySet()) for(var property:state.getProperties()) if(property.getName().equals(entry.getKey())) state=withValue(state,property,entry.getValue());
+  return state;
+ }
+ private static <T extends Comparable<T>> net.minecraft.world.level.block.state.BlockState withValue(net.minecraft.world.level.block.state.BlockState state,net.minecraft.world.level.block.state.properties.Property<T> property,String value) {
+  return property.getValue(value).map(v->state.setValue(property,v)).orElseThrow(()->new IllegalStateException("Invalid scenario property "+property.getName()+"="+value));
+ }
  public static void tick(Minecraft mc,Session session,String runtime) {
   if(session==null || !Files.isRegularFile(session.root().resolve("scenario.json"))) return;
   if(prepared && !hidden && !BridgeCore.isPrimary() && "true".equals(System.getenv("MMLF_HIDE_SECONDARY"))) {
@@ -76,6 +85,7 @@ public final class DemoScene {
    if(testTicks==500) net.minecraft.client.Screenshot.grab(mc.gameDirectory,"mmlf-item-demo.png",mc.getMainRenderTarget(),message->System.out.println("MMLF screenshot "+message.getString()));
    if(testTicks==390) net.minecraft.client.Screenshot.grab(mc.gameDirectory,"mmlf-thirdparty-demo.png",mc.getMainRenderTarget(),message->System.out.println("MMLF screenshot "+message.getString()));
    if(testTicks==200) System.out.println("MMLF SELFTEST request="+BridgeCore.requestInteraction());
+   if(testTicks>=600) GuiSelfTest.tick(mc,testTicks-600,side);
   }
   if(!prepared && mc.player!=null && mc.getSingleplayerServer()!=null && !mc.getSingleplayerServer().getPlayerList().getPlayers().isEmpty()) {
    prepared=true;
@@ -95,9 +105,17 @@ public final class DemoScene {
      for(Placement item:scene.placements()) if(item.runtime().equals(runtime)) {
       var key=ResourceLocation.parse(item.block());
       if(!BuiltInRegistries.BLOCK.containsKey(key)) { if(item.optional()) continue; throw new IllegalStateException("Missing scenario block "+key); }
-      var blockState=BuiltInRegistries.BLOCK.get(key).defaultBlockState();
+      var blockState=withProperties(BuiltInRegistries.BLOCK.get(key).defaultBlockState(),item.properties());
       var at=new BlockPos(item.x(),item.y(),item.z());
       level.setBlock(at,blockState,3);
+      if(key.getNamespace().equals("minecraft")) BridgeCore.ownVanilla(at);
+      if(item.items()!=null && level.getBlockEntity(at) instanceof net.minecraft.world.Container container) {
+       int slot=0;
+       for(String entry:item.items()) {
+        String[] parts=entry.split("\\*"); var itemKey=ResourceLocation.parse(parts[0]);
+        if(slot<container.getContainerSize() && BuiltInRegistries.ITEM.containsKey(itemKey)) container.setItem(slot++,new net.minecraft.world.item.ItemStack(BuiltInRegistries.ITEM.get(itemKey),parts.length>1?Integer.parseInt(parts[1]):1));
+       }
+      }
       if(blockState.hasProperty(net.minecraft.world.level.block.state.properties.BlockStateProperties.DOUBLE_BLOCK_HALF))
        level.setBlock(at.above(),blockState.setValue(net.minecraft.world.level.block.state.properties.BlockStateProperties.DOUBLE_BLOCK_HALF,net.minecraft.world.level.block.state.properties.DoubleBlockHalf.UPPER),3);
      }

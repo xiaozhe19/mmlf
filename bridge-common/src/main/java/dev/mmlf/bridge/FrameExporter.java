@@ -5,12 +5,12 @@ import dev.mmlf.common.*;
 import dev.mmlf.common.Messages.*;
 import java.nio.ByteBuffer;
 import java.util.Map;
-import java.util.function.Consumer;
 import org.lwjgl.opengl.*;
 
 /**
  * Background side of the composited view: copies the world colour and depth into pixel-pack buffers without waiting,
- * and publishes each one once its GPU fence has passed (usually the next frame). Three buffers rotate so the render
+ * and publishes the newest one whose GPU fence has passed (usually the next frame), with its metadata in the shared slot,
+ * so the primary needs no announcement. Three buffers rotate so the render
  * thread never blocks on the read-back; a buffer still unfinished after a second is abandoned.
  */
 final class FrameExporter {
@@ -18,17 +18,22 @@ final class FrameExporter {
     private static final long STUCK_NANOS=1_000_000_000L;
     private static final class Slot {
         int buffer; long capacity; long fence; boolean busy; long started;
-        int width, height; Pose pose; long frameId;
+        int width, height; Pose pose; long frameId, cameraSequence; String sessionId; FrameTiming.Clock clock;
     }
     private static final Slot[] ring=new Slot[RING];
+    private static final long[] readyIds=new long[RING];
+    private static final boolean[] readySlots=new boolean[RING];
     private static int next;
-    private static long frameSequence;
+    private static long frameSequence, lastPublishedFrame, metricSince;
+    private static final SampleWindow captureLatencyMs=new SampleWindow(2048);
 
     private FrameExporter() {}
 
     /** Called right after the world pass, before the hand. The pose must be the camera this frame was rendered with. */
-    static void capture(RenderTarget target,Pose pose,FrameFile file,Consumer<Frame> announce,String runtime,double offsetNanos) {
-        drain(file,announce,runtime,offsetNanos,false);
+    static void capture(RenderTarget target,Pose pose,FrameFile file,String runtime,
+                        String sessionId,long cameraSequence,FrameTiming.Clock clock) {
+        drain(file,runtime,false);
+        if(clock==null || !clock.validAt(System.nanoTime())) return;
         int width=target.width,height=target.height;
         if(!FrameFile.fits(width,height,FrameFile.MAX_PIXELS)) return;
         Slot slot=ring[next]; if(slot==null) slot=ring[next]=new Slot();
@@ -49,34 +54,51 @@ final class FrameExporter {
             GL30.glBindFramebuffer(GL30.GL_READ_FRAMEBUFFER,read);
             slot.fence=GL32.glFenceSync(GL32.GL_SYNC_GPU_COMMANDS_COMPLETE,0);
         }
-        slot.busy=true; slot.started=now; slot.width=width; slot.height=height; slot.pose=pose; slot.frameId=++frameSequence;
+        slot.busy=true; slot.started=now; slot.width=width; slot.height=height; slot.pose=pose; slot.frameId=++frameSequence; slot.cameraSequence=cameraSequence; slot.sessionId=sessionId; slot.clock=clock;
         next=(next+1)%RING;
     }
 
-    /** Publishes every finished read-back, oldest first. With wait=false a buffer whose fence is pending is left for later. */
-    static void drain(FrameFile file,Consumer<Frame> announce,String runtime,double offsetNanos,boolean wait) {
+    /** Publish only the newest completed readback; pending GPU work is never waited on in normal rendering. */
+    static void drain(FrameFile file,String runtime,boolean wait) {
         for(int k=0;k<RING;k++) {
-            Slot slot=ring[(next+k)%RING];
-            if(slot==null || !slot.busy) continue;
-            int status=GL32.glClientWaitSync(slot.fence,0,wait?5_000_000L:0L);
+            Slot candidate=ring[k];
+            readySlots[k]=false;
+            if(candidate==null || !candidate.busy) continue;
+            int status=GL32.glClientWaitSync(candidate.fence,0,wait?5_000_000L:0L);
             if(status!=GL32.GL_ALREADY_SIGNALED && status!=GL32.GL_CONDITION_SATISFIED) continue;
-            int n=slot.width*slot.height*4;
-            try(PixelTransfer transfer=new PixelTransfer()) {
-                GL15.glBindBuffer(GL21.GL_PIXEL_PACK_BUFFER,slot.buffer);
-                ByteBuffer mapped=GL30.glMapBufferRange(GL21.GL_PIXEL_PACK_BUFFER,0,2L*n,GL30.GL_MAP_READ_BIT);
-                if(mapped==null) { MmlfLog.sampled("render.capture","map_failed",1000,Map.of("frameId",slot.frameId)); release(slot); continue; }
-                try {
-                    int index=file.publish(slot.frameId,slot.width,slot.height,mapped.slice(0,n),mapped.slice(n,n));
-                    announce.accept(new Frame(runtime,slot.frameId,slot.pose,index,slot.width,slot.height,slot.started,true,"opengl-window-depth",offsetNanos));
-                    MmlfLog.sampled("render.capture","frame",1000,Map.of("frameId",slot.frameId,"slot",index,"width",slot.width,"height",slot.height,"readbackMs",(System.nanoTime()-slot.started)/1e6));
-                } finally { GL15.glUnmapBuffer(GL21.GL_PIXEL_PACK_BUFFER); }
-            } catch(Exception e) { MmlfLog.sampled("render.capture","publish_failed",1000,Map.of("exception",e.toString())); }
-            release(slot);
+            readySlots[k]=true; readyIds[k]=candidate.frameId;
         }
+        int selected=CompletedFrameSelector.newest(readyIds,readySlots,lastPublishedFrame);
+        for(int k=0;k<RING;k++) if(readySlots[k] && k!=selected) release(ring[k]);
+        if(selected<0) return;
+        Slot slot=ring[selected];
+        int n=slot.width*slot.height*4;
+        try(PixelTransfer transfer=new PixelTransfer()) {
+            GL15.glBindBuffer(GL21.GL_PIXEL_PACK_BUFFER,slot.buffer);
+            ByteBuffer mapped=GL30.glMapBufferRange(GL21.GL_PIXEL_PACK_BUFFER,0,2L*n,GL30.GL_MAP_READ_BIT);
+            if(mapped==null) { MmlfLog.sampled("render.capture","map_failed",1000,Map.of("frameId",slot.frameId)); return; }
+            try {
+                // The slot index is unknown before publishing and meaningless to a polling reader.
+                Frame frame=new Frame(runtime,slot.frameId,slot.pose,-1,slot.width,slot.height,slot.started,true,"opengl-window-depth",slot.clock.offsetNanos(),slot.sessionId,slot.cameraSequence,slot.clock.uncertaintyNanos());
+                byte[] metadata=Wire.JSON.toJson(frame).getBytes(java.nio.charset.StandardCharsets.UTF_8);
+                int index=file.publish(slot.frameId,slot.width,slot.height,mapped.slice(0,n),mapped.slice(n,n),metadata);
+                if(index>=0) lastPublishedFrame=slot.frameId; else MmlfLog.sampled("render.capture","slots_busy",1000,Map.of("frameId",slot.frameId));
+                long finished=System.nanoTime();
+                captureLatencyMs.add((finished-slot.started)/1e6);
+                if(metricSince==0) metricSince=finished;
+                if(finished-metricSince>=10_000_000_000L) {
+                    var latency=captureLatencyMs.drain();
+                    MmlfLog.info("metrics","capture_latency",Map.of("samples",latency.count(),"p50Ms",latency.p50(),"p95Ms",latency.p95(),"p99Ms",latency.p99()));
+                    metricSince=finished;
+                }
+                MmlfLog.sampled("render.capture","frame",1000,Map.of("frameId",slot.frameId,"slot",index,"width",slot.width,"height",slot.height,"readbackMs",(System.nanoTime()-slot.started)/1e6));
+            } finally { GL15.glUnmapBuffer(GL21.GL_PIXEL_PACK_BUFFER); }
+        } catch(Exception e) { MmlfLog.sampled("render.capture","publish_failed",1000,Map.of("exception",e.toString())); }
+        finally { release(slot); }
     }
 
     private static void release(Slot slot) {
         if(slot.fence!=0) GL32.glDeleteSync(slot.fence);
-        slot.fence=0; slot.busy=false; slot.pose=null;
+        slot.fence=0; slot.busy=false; slot.pose=null; slot.clock=null; slot.sessionId=null;
     }
 }

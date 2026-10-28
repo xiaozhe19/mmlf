@@ -15,7 +15,12 @@ public record Session(String uri, String token, String directory, String primary
             throw new IOException("MMLF session does not name a primary runtime");
         return session;
     }
+    public String identity() {
+        try { return java.util.HexFormat.of().formatHex(java.security.MessageDigest.getInstance("SHA-256").digest(token.getBytes(java.nio.charset.StandardCharsets.UTF_8))); }
+        catch(java.security.NoSuchAlgorithmException e) { throw new AssertionError(e); }
+    }
     public Path root() { return Path.of(directory).toAbsolutePath().normalize(); }
+    public Path posePath() { return root().resolve("camera.pose"); }
     public Path framePath(String id) {
         if (!id.matches("[a-zA-Z0-9_-]{1,48}")) throw new IllegalArgumentException("invalid runtime id");
         return root().resolve(id + ".frames");

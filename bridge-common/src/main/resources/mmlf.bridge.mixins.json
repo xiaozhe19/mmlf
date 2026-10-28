@@ -5,6 +5,7 @@
   "compatibilityLevel": "JAVA_21",
   "client": [
     "CameraMixin",
+    "BackgroundMusicMixin",
     "GameRendererMixin",
     "BlockRenderDispatcherMixin",
     "MinecraftMixin",
@@ -12,13 +13,26 @@
     "GuiItemMixin",
     "SectionCompilerMixin",
     "HitOutlineMixin",
-    "WindowMixin"
+    "WindowMixin",
+    "MouseHandlerAccessor",
+    "KeyboardHandlerAccessor",
+    "MouseFocusMixin",
+    "ScreenMixin",
+    "BlendCaptureMixin",
+    "HostedKeyStateMixin",
+    "CreativeTabsAccessor",
+    "CreativeTabMixin",
+    "GameModeAccessor",
+    "FollowedGroundMixin"
   ],
   "injectors": {
     "defaultRequire": 1
   },
   "mixins": [
-    "SoundMixin",
-    "EntityCollisionMixin"
+    "EntityCollisionMixin",
+    "ContainerMenuMixin",
+    "SlotMixin",
+    "ItemPickupMixin",
+    "ItemTooltipMixin"
   ]
 }

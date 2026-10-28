@@ -17,15 +17,24 @@ import org.lwjgl.opengl.*;
 import java.nio.*;
 import java.util.*;
 
-/** Transfers native first-person and item-GUI pixels. No foreign resource or model is registered. */
+/**
+ * Transfers native first-person and item-GUI pixels. No foreign resource or model is registered.
+ * The owner publishes each image with its {@link Visual} metadata in a shared slot; the primary polls the owner's file.
+ */
 public final class VisualLayers {
- private record Notice(Frame frame,String reference,int x,int y) {}
  private record Crop(ByteBuffer pixels,int x,int y,int width,int height) {}
- private static FrameFile handWriter,iconWriter,handReader,iconReader;
- private static String handOwner,iconOwner;
- private static Notice incomingHand,completeHand;
+ /** The primary's view of one owner's hand or icon file. */
+ private static final class Source {
+  final String owner; final FrameFile file; FrameFile.Latest cursor; long polled;
+  Source(String owner,FrameFile file) {this.owner=owner;this.file=file;}
+  void close() {try {file.close();} catch(java.io.IOException ignored) {}}
+ }
+ private static FrameFile handWriter,iconWriter;
+ private static Source handSource;
+ private static final Map<String,Source> iconSources=new HashMap<>();
+ private static final Map<String,Long> nextOpen=new HashMap<>();
+ private static Visual completeHand; private static long handArrived;
  private static FrameFile.Pixels handPixels,handSpare;
- private static final Map<String,Notice> incomingIcons=new HashMap<>();
  private record Icon(DynamicTexture texture,ResourceLocation id,long frame) {}
  private static final Map<String,Icon> icons=new LinkedHashMap<>();
  private static ByteBuffer color,handCrop,zeroDepth,localColor,iconColor;
@@ -39,13 +48,24 @@ public final class VisualLayers {
   var mc=Minecraft.getInstance();return mc.player==null?"minecraft:air":RemoteItems.held(mc.player.getMainHandItem());
  }
  public static boolean replacePrimaryHand() {return BridgeCore.isPrimary() && RemoteItemRef.parse(held()).isPresent();}
- public static void receive(Event event,String source) {
-  var fields=event.values(); Frame frame=Wire.JSON.fromJson(fields.get("frame"),Frame.class);
-  var reference=RemoteItemRef.parse(fields.get("reference")).orElseThrow();
-  if(!frame.runtime().equals(source) || !reference.owner().equals(frame.runtime())) throw new IllegalArgumentException("visual owner mismatch");
-  int x=Integer.parseInt(fields.getOrDefault("x","0")),y=Integer.parseInt(fields.getOrDefault("y","0"));
-  Notice notice=new Notice(frame,fields.get("reference"),x,y);
-  if(fields.get("kind").equals("hand")) incomingHand=notice;else incomingIcons.put(notice.reference(),notice);
+ private static byte[] encode(Visual visual) {return Wire.JSON.toJson(visual).getBytes(java.nio.charset.StandardCharsets.UTF_8);}
+ /** Null when the metadata does not describe an image of {@code owner}'s own item. */
+ private static Visual decode(FrameFile.Latest latest,String owner) {
+  try {
+   Visual visual=Wire.JSON.fromJson(new String(latest.metadata(),java.nio.charset.StandardCharsets.UTF_8),Visual.class);
+   if(visual==null || visual.frame()==null || !owner.equals(visual.frame().runtime()) || visual.frame().frameId()!=latest.frameId()
+    || visual.frame().width()!=latest.width() || visual.frame().height()!=latest.height()) return null;
+   var reference=RemoteItemRef.parse(visual.reference());
+   return reference.isPresent() && reference.get().owner().equals(owner) ? visual : null;
+  } catch(RuntimeException e) {return null;}
+ }
+ /** Opens an owner's file once it exists; a missing file is retried at most twice a second. */
+ private static Source open(String owner,String suffix,int maxPixels) {
+  String key=owner+suffix;long now=System.nanoTime();Long due=nextOpen.get(key);
+  if(due!=null && now-due<0) return null;
+  nextOpen.put(key,now+500_000_000L);
+  try {return new Source(owner,FrameFile.reader(BridgeCore.session().framePath(key),maxPixels));}
+  catch(java.io.IOException | IllegalArgumentException e) {MmlfLog.sampled("render.visual","file_unavailable",5000,Map.of("file",key,"reason",e.toString()));return null;}
  }
  public static void beforeHand() {
   if(!RemoteItems.nativeHandSelected()) return;
@@ -62,7 +82,10 @@ public final class VisualLayers {
  public static void afterHand() {
   var mc=Minecraft.getInstance();if(BridgeCore.session()==null || mc.player==null) return;
   if(BridgeCore.isPrimary()) {compositeHand();return;}
+  renderRequestedIcon();
   if(!RemoteItems.nativeHandSelected()) return;
+  // Until the mirrored inventory has put the selected stack in this hand, a frame would show the wrong hand.
+  if(InventoryBridge.heldProblem(mc.player.getMainHandItem(),RemoteItems.selectedReference())!=null) return;
   long now=System.nanoTime();
   if(now-lastHand<33_000_000L) return;
   lastHand=now;
@@ -76,29 +99,35 @@ public final class VisualLayers {
    int cropBytes=crop.width()*crop.height()*4;
    if(zeroDepth==null || zeroDepth.capacity()<cropBytes) zeroDepth=BufferUtils.createByteBuffer(cropBytes);
    zeroDepth.clear().limit(cropBytes);
-   if(handWriter==null) handWriter=new FrameFile(BridgeCore.session().framePath(BridgeCore.runtimeId()+"-hand"));
-   long id=++sequence;int slot=handWriter.publish(id,crop.width(),crop.height(),crop.pixels(),zeroDepth);
-   if(slot>=0 && !handExportReady) {handExportReady=true;MmlfLog.info("render.hand","native_export_ready",Map.of("width",crop.width(),"height",crop.height()));}
+   // Crop offsets are only meaningful while this framebuffer matches the primary's.
    Pose pose=BridgeCore.renderedPose();
-   if(slot>=0 && pose!=null && pose.width()==target.width && pose.height()==target.height) RemoteItems.sendVisual("hand",new Frame(BridgeCore.runtimeId(),id,pose,slot,crop.width(),crop.height(),System.nanoTime(),true,"overlay"),RemoteItems.selectedReference(),crop.x(),crop.y());
+   if(pose==null || pose.width()!=target.width || pose.height()!=target.height) return;
+   if(handWriter==null) handWriter=FrameFile.writer(BridgeCore.session().framePath(BridgeCore.runtimeId()+"-hand"));
+   long id=++sequence;
+   Visual visual=new Visual(new Frame(BridgeCore.runtimeId(),id,pose,-1,crop.width(),crop.height(),System.nanoTime(),true,"overlay"),RemoteItems.selectedReference(),crop.x(),crop.y());
+   int slot=handWriter.publish(id,crop.width(),crop.height(),crop.pixels(),zeroDepth,encode(visual));
+   if(slot>=0 && !handExportReady) {handExportReady=true;MmlfLog.info("render.hand","native_export_ready",Map.of("width",crop.width(),"height",crop.height()));}
    MmlfLog.sampled("render.hand","native_export",1000,Map.of("frameId",id,"slot",slot,"x",crop.x(),"y",crop.y(),"width",crop.width(),"height",crop.height()));
    renderIconNative();
   } catch(Exception e) {MmlfLog.error("render.hand","export_failed",Map.of("exception",e.toString()));}
  }
  private static void compositeHand() {
-  if(!replacePrimaryHand() || incomingHand==null) return;
-  String reference=held();Notice notice=incomingHand;
-  if(!reference.equals(notice.reference())) return;
+  if(!replacePrimaryHand()) return;
+  String reference=held();String owner=RemoteItemRef.parse(reference).orElseThrow().owner();
   try(PixelTransfer transfer=new PixelTransfer()) {
-   if(handReader==null || !notice.frame().runtime().equals(handOwner)) {
-    if(handReader!=null) handReader.close();handOwner=notice.frame().runtime();
-    handReader=new FrameFile(BridgeCore.session().framePath(handOwner+"-hand"));completeHand=null;
+   if(handSource==null || !handSource.owner.equals(owner)) {
+    if(handSource!=null) handSource.close();
+    handSource=open(owner,"-hand",FrameFile.MAX_PIXELS);completeHand=null;
+    if(handSource==null) return;
    }
-   if(completeHand==null || completeHand.frame().frameId()!=notice.frame().frameId()) {
-    var pixels=handReader.read(notice.frame(),handSpare);
-    if(pixels!=null) {handSpare=handPixels;handPixels=pixels;completeHand=notice;}
+   var latest=handSource.file.readLatest(handSource.cursor,handSpare);
+   if(latest!=null) {
+    handSource.cursor=latest;Visual visual=decode(latest,owner);
+    if(visual!=null) {handSpare=handPixels;handPixels=latest.pixels();completeHand=visual;handArrived=System.nanoTime();}
    }
-   if(completeHand==null || !reference.equals(completeHand.reference())) return;
+   // Right after a hotbar switch the owner's hand still shows the previous stack for a frame or two; keeping that
+   // recent frame avoids the hand blinking out, while an old frame of another item is never shown.
+   if(completeHand==null || !reference.equals(completeHand.reference()) && System.nanoTime()-handArrived>250_000_000L) return;
    var mc=Minecraft.getInstance();var target=mc.getMainRenderTarget();Frame frame=completeHand.frame();
    // Crop offsets are in the owner's framebuffer; they are only valid while both framebuffers have the same size.
    Pose source=frame.pose();
@@ -133,12 +162,35 @@ public final class VisualLayers {
   }
   handCrop.flip();return new Crop(handCrop,minX,minY,cropWidth,cropHeight);
  }
+ /** Owner: icons the primary asked for (items shown in its inventory), at most one per frame. */
+ private static final Set<String> requestedIcons=new LinkedHashSet<>();
+ public static void requestIcons(String references) {
+  if(references==null) return;
+  synchronized(requestedIcons) {
+   for(String reference:references.split(",")) {
+    try {var ref=RemoteItemRef.parse(reference);if(ref.isPresent() && ref.get().owner().equals(BridgeCore.runtimeId()) && requestedIcons.size()<64) requestedIcons.add(reference);}
+    catch(IllegalArgumentException ignored) {}
+   }
+  }
+ }
+ private static void renderRequestedIcon() {
+  String reference;
+  synchronized(requestedIcons) {if(requestedIcons.isEmpty()) return;var it=requestedIcons.iterator();reference=it.next();it.remove();}
+  var stack=RemoteItems.nativeStack(RemoteItemRef.parse(reference).orElseThrow().token());
+  if(stack==null || stack.isEmpty()) return;
+  try(PixelTransfer transfer=new PixelTransfer()) {renderIcon(stack,reference);}
+  catch(Exception e) {MmlfLog.error("render.icon","requested_failed",Map.of("exception",e.toString()));}
+ }
  private static void renderIconNative() throws Exception {
   String reference=RemoteItems.selectedReference();long now=System.nanoTime();
   if(reference.equals(lastIconReference) && now-lastIcon<250_000_000L) return;
   lastIconReference=reference;lastIcon=now;
   var mc=Minecraft.getInstance();var stack=mc.player.getMainHandItem();
   if(stack.isEmpty()) return;
+  renderIcon(stack,reference);
+ }
+ private static void renderIcon(ItemStack stack,String reference) throws Exception {
+  var mc=Minecraft.getInstance();
   if(iconTarget==null) {iconTarget=new TextureTarget(32,32,true,Minecraft.ON_OSX);iconTarget.setClearColor(0,0,0,0);iconColor=BufferUtils.createByteBuffer(32*32*4);}
   Matrix4f previous=new Matrix4f(RenderSystem.getProjectionMatrix());var sorting=RenderSystem.getVertexSorting();
   try {
@@ -151,37 +203,84 @@ public final class VisualLayers {
    finally {modelView.popMatrix();RenderSystem.applyModelViewMatrix();}
    iconColor.clear();GL11.glReadPixels(0,0,32,32,GL11.GL_RGBA,GL11.GL_UNSIGNED_BYTE,iconColor);
   } finally {RenderSystem.setProjectionMatrix(previous,sorting);mc.getMainRenderTarget().bindWrite(true);}
-  if(iconWriter==null) iconWriter=new FrameFile(BridgeCore.session().framePath(BridgeCore.runtimeId()+"-icon"),ICON_PIXELS);
+  if(iconWriter==null) iconWriter=FrameFile.writer(BridgeCore.session().framePath(BridgeCore.runtimeId()+"-icon"),ICON_PIXELS);
   ByteBuffer empty=BufferUtils.createByteBuffer(32*32*4);
-  long id=++sequence;int slot=iconWriter.publish(id,32,32,iconColor,empty);
+  long id=++sequence;
+  Visual visual=new Visual(new Frame(BridgeCore.runtimeId(),id,BridgeCore.renderedPose(),-1,32,32,System.nanoTime(),true,"overlay"),reference,0,0);
+  int slot=iconWriter.publish(id,32,32,iconColor,empty,encode(visual));
   if(slot>=0 && !iconExportReady) {iconExportReady=true;MmlfLog.info("render.icon","native_export_ready",Map.of("width",32,"height",32));}
-  if(slot>=0) RemoteItems.sendVisual("icon",new Frame(BridgeCore.runtimeId(),id,BridgeCore.renderedPose(),slot,32,32,System.nanoTime(),true,"overlay"),reference);
   MmlfLog.sampled("render.icon","native_export",1000,Map.of("frameId",id,"slot",slot));
+ }
+ /**
+  * Owner: every stack's native GUI icon in one atlas, {@code columns} cells of {@code cell} pixels per row, read back
+  * once (bottom row first). Used for a creative catalogue, so the primary has all icons before it shows the tabs.
+  */
+ static ByteBuffer renderAtlas(List<ItemStack> stacks,int cell,int columns,int width,int height) {
+  var mc=Minecraft.getInstance();
+  var target=new TextureTarget(width,height,true,Minecraft.ON_OSX);
+  ByteBuffer pixels=BufferUtils.createByteBuffer(width*height*4);
+  Matrix4f previous=new Matrix4f(RenderSystem.getProjectionMatrix());var sorting=RenderSystem.getVertexSorting();
+  try(PixelTransfer transfer=new PixelTransfer()) {
+   target.setClearColor(0,0,0,0);target.clear(Minecraft.ON_OSX);target.bindWrite(true);
+   // GUI units of 16 per cell: an item renders at cell/16 pixels per unit.
+   float scale=cell/16f;
+   RenderSystem.setProjectionMatrix(new Matrix4f().setOrtho(0,width/scale,height/scale,0,-1000,1000),VertexSorting.ORTHOGRAPHIC_Z);
+   var modelView=RenderSystem.getModelViewStack();modelView.pushMatrix();modelView.identity();RenderSystem.applyModelViewMatrix();
+   net.minecraft.client.renderer.FogRenderer.setupNoFog();com.mojang.blaze3d.platform.Lighting.setupFor3DItems();
+   try {
+    var graphics=new GuiGraphics(mc,mc.renderBuffers().bufferSource());
+    for(int i=0;i<stacks.size();i++) {
+     try {graphics.renderItem(stacks.get(i),(i%columns)*16,(i/columns)*16);}
+     catch(RuntimeException e) {MmlfLog.warn("render.icon","atlas_item_failed",Map.of("item",String.valueOf(stacks.get(i)),"exception",e.toString()));}
+    }
+    graphics.flush();
+   } finally {modelView.popMatrix();RenderSystem.applyModelViewMatrix();}
+   GL11.glReadPixels(0,0,width,height,GL11.GL_RGBA,GL11.GL_UNSIGNED_BYTE,pixels);
+  } finally {RenderSystem.setProjectionMatrix(previous,sorting);mc.getMainRenderTarget().bindWrite(true);target.destroyBuffers();}
+  MmlfLog.info("render.icon","atlas_rendered",Map.of("icons",stacks.size(),"width",width,"height",height));
+  return pixels;
+ }
+ /** Primary: references without an icon yet, asked of their owners at most twice a second. */
+ private static final Map<String,Set<String>> missingIcons=new HashMap<>();
+ private static long lastIconRequest;
+ private static void missingIcon(String owner,String reference) {missingIcons.computeIfAbsent(owner,o->new LinkedHashSet<>()).add(reference);}
+ public static void flushIconRequests() {
+  long now=System.nanoTime();if(missingIcons.isEmpty() || now-lastIconRequest<500_000_000L) return;
+  lastIconRequest=now;
+  for(var entry:missingIcons.entrySet()) BridgeCore.send("event",entry.getKey(),new Event("mmlf:icon_request",Map.of("references",String.join(",",entry.getValue().stream().limit(32).toList()))));
+  missingIcons.clear();
  }
  public static boolean drawIcon(GuiGraphics graphics,ItemStack stack,int x,int y) {
   if(!BridgeCore.isPrimary()) return false;
   String reference=RemoteItems.held(stack);var remote=RemoteItemRef.parse(reference);if(remote.isEmpty()) return false;
-  var notice=incomingIcons.get(reference);Icon icon=icons.get(reference);
+  String owner=remote.get().owner();
+  if(RemoteCatalog.drawAtlasIcon(graphics,owner,reference,x,y)) return true;
   try(PixelTransfer transfer=new PixelTransfer()) {
-   if(notice!=null && (icon==null || icon.frame()!=notice.frame().frameId())) {
-    if(iconReader==null || !remote.get().owner().equals(iconOwner)) {
-     if(iconReader!=null) iconReader.close();iconOwner=remote.get().owner();iconReader=new FrameFile(BridgeCore.session().framePath(iconOwner+"-icon"),ICON_PIXELS);
+   Source source=iconSources.get(owner);
+   if(source==null && (source=open(owner,"-icon",ICON_PIXELS))!=null) iconSources.put(owner,source);
+   // The newest icon may belong to another of this owner's items; it is filed under its own reference.
+   // A creative page draws dozens of remote icons per frame; the owner's file is read at most once per frame or so.
+   long now=System.nanoTime();
+   FrameFile.Latest latest=null;
+   if(source!=null && now-source.polled>=4_000_000L) {source.polled=now;latest=source.file.readLatest(source.cursor,null);}
+   Visual notice=null;
+   if(latest!=null) {source.cursor=latest;notice=decode(latest,owner);}
+   if(notice!=null) {
+    var pixels=latest.pixels();Icon icon=icons.get(notice.reference());
+    var image=new NativeImage(32,32,false);var bytes=pixels.color();
+    for(int row=0;row<32;row++) for(int col=0;col<32;col++) {
+     int i=((31-row)*32+col)*4;image.setPixelRGBA(col,row,(bytes.get(i)&255)|((bytes.get(i+1)&255)<<8)|((bytes.get(i+2)&255)<<16)|((bytes.get(i+3)&255)<<24));
     }
-    var pixels=iconReader.read(notice.frame());
-    if(pixels!=null) {
-     var image=new NativeImage(32,32,false);var bytes=pixels.color();
-     for(int row=0;row<32;row++) for(int col=0;col<32;col++) {
-      int i=((31-row)*32+col)*4;image.setPixelRGBA(col,row,(bytes.get(i)&255)|((bytes.get(i+1)&255)<<8)|((bytes.get(i+2)&255)<<16)|((bytes.get(i+3)&255)<<24));
-     }
-     if(icon!=null) Minecraft.getInstance().getTextureManager().release(icon.id());
-     var texture=new DynamicTexture(image);var id=Minecraft.getInstance().getTextureManager().register("mmlf-native-icon",texture);
-     icon=new Icon(texture,id,notice.frame().frameId());icons.put(reference,icon);
-     if(!iconReceivedReady) {iconReceivedReady=true;MmlfLog.info("render.icon","native_icon_ready",Map.of("owner",remote.get().owner()));}
-     MmlfLog.debug("render.icon","native_received",Map.of("owner",remote.get().owner(),"frameId",notice.frame().frameId()));
-    }
+    if(icon!=null) Minecraft.getInstance().getTextureManager().release(icon.id());
+    else if(icons.size()>=256) {var oldest=icons.keySet().iterator().next();Minecraft.getInstance().getTextureManager().release(icons.remove(oldest).id());}
+    var texture=new DynamicTexture(image);var id=Minecraft.getInstance().getTextureManager().register("mmlf-native-icon",texture);
+    icons.put(notice.reference(),new Icon(texture,id,notice.frame().frameId()));
+    if(!iconReceivedReady) {iconReceivedReady=true;MmlfLog.info("render.icon","native_icon_ready",Map.of("owner",owner));}
+    MmlfLog.debug("render.icon","native_received",Map.of("owner",owner,"frameId",notice.frame().frameId()));
    }
+   Icon icon=icons.get(reference);
    // The native icon follows the pick by one round trip; until then draw nothing rather than the proxy paper.
-   if(icon==null) return true;
+   if(icon==null) {missingIcon(owner,reference);return true;}
    RenderSystem.enableBlend();RenderSystem.defaultBlendFunc();graphics.blit(icon.id(),x,y,16,16,0F,0F,32,32,32,32);
    return true;
   } catch(Exception e) {MmlfLog.error("render.icon","draw_failed",Map.of("exception",e.toString()));return true;}

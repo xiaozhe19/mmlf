@@ -1,3 +1,5 @@
 {
-  "block.mmlf_fabric_test.demo_block": "MMLF Fabric Demo Block"
+  "block.mmlf_fabric_test.demo_block": "MMLF Fabric Demo Block",
+  "block.mmlf_fabric_test.gui_block": "MMLF Test Screen Block",
+  "block.mmlf_fabric_test.box_block": "MMLF Test Box"
 }

@@ -29,6 +29,79 @@
       "y": 100,
       "z": 0,
       "optional": true
+    },
+    {
+      "runtime": "fabric",
+      "block": "mmlf_fabric_test:gui_block",
+      "x": -1,
+      "y": 100,
+      "z": -3
+    },
+    {
+      "runtime": "fabric",
+      "block": "mmlf_fabric_test:box_block",
+      "x": -2,
+      "y": 100,
+      "z": -3
+    },
+    {
+      "runtime": "neoforge",
+      "block": "mmlf_neoforge_test:gui_block",
+      "x": 1,
+      "y": 100,
+      "z": -3
+    },
+    {
+      "runtime": "neoforge",
+      "block": "mmlf_neoforge_test:box_block",
+      "x": 2,
+      "y": 100,
+      "z": -3
+    },
+    {
+      "runtime": "fabric",
+      "block": "minecraft:chest",
+      "x": -6,
+      "y": 101,
+      "z": -3,
+      "properties": { "facing": "south" },
+      "items": ["minecraft:cobblestone*32", "minecraft:oak_log*16", "minecraft:iron_ingot*8"],
+      "optional": true
+    },
+    {
+      "runtime": "fabric",
+      "block": "toms_storage:inventory_connector",
+      "x": -5,
+      "y": 101,
+      "z": -3,
+      "optional": true
+    },
+    {
+      "runtime": "fabric",
+      "block": "toms_storage:storage_terminal",
+      "x": -4,
+      "y": 101,
+      "z": -3,
+      "properties": { "facing": "south" },
+      "optional": true
+    },
+    {
+      "runtime": "neoforge",
+      "block": "farmersdelight:stove",
+      "x": 4,
+      "y": 100,
+      "z": -3,
+      "properties": { "facing": "south", "lit": "true" },
+      "optional": true
+    },
+    {
+      "runtime": "neoforge",
+      "block": "farmersdelight:cooking_pot",
+      "x": 4,
+      "y": 101,
+      "z": -3,
+      "properties": { "facing": "south" },
+      "optional": true
     }
   ]
 }
