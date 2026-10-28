@@ -8,8 +8,9 @@
 **/run/
 runtime/
 
-# 文档与报告不入库
-docs/
+# 文档与报告不入库（README 引用的图片除外）
+docs/*
+!docs/media/
 
 # AI 助手配置与说明（不参与构建）
 AGENTS.md

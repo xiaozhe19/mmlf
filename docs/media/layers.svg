@@ -1,0 +1,88 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 610" width="900" height="610" role="img" aria-label="交互层、Fabric 画面层与 NeoForge 画面层叠合成一个窗口">
+  <style>
+    .bg { fill: #ffffff; }
+    .title { font: 700 24px "Segoe UI", "Microsoft YaHei", "PingFang SC", "Noto Sans CJK SC", sans-serif; fill: #24292f; }
+    .sub { font: 15px "Segoe UI", "Microsoft YaHei", "PingFang SC", "Noto Sans CJK SC", sans-serif; fill: #57606a; }
+    .tag { font: 700 20px "Segoe UI", "Microsoft YaHei", "PingFang SC", "Noto Sans CJK SC", sans-serif; fill: #24292f; text-anchor: middle; }
+    .tagsub { font: 14px "Segoe UI", "Microsoft YaHei", "PingFang SC", "Noto Sans CJK SC", sans-serif; fill: #57606a; text-anchor: middle; }
+    .lead { stroke: #8c959f; stroke-width: 1.5; stroke-dasharray: 4 4; fill: none; }
+    .ptitle { font: 700 16px "Segoe UI", "Microsoft YaHei", "PingFang SC", "Noto Sans CJK SC", sans-serif; }
+    @media (prefers-color-scheme: dark) {
+      .bg { fill: #0d1117; }
+      .title, .tag { fill: #e6edf3; }
+      .sub, .tagsub { fill: #9198a1; }
+      .lead { stroke: #6e7681; }
+    }
+  </style>
+  <rect class="bg" width="900" height="610" rx="16"/>
+
+  <text class="title" x="40" y="54">一个窗口，三层叠合</text>
+  <text class="sub" x="40" y="80">每一层都来自各自原生运行的 Minecraft，按深度合成到主窗口</text>
+
+  <!-- 最后：NeoForge 画面层 -->
+  <g transform="translate(450 100) skewY(12)">
+    <rect width="340" height="230" rx="10" fill="#FFF2E3" stroke="#E68A2E" stroke-width="3"/>
+    <text class="ptitle" x="16" y="28" fill="#B4610F">NeoForge Runtime</text>
+    <!-- 橙色测试方块 -->
+    <g transform="translate(250 105)">
+      <path d="M0 -40 L35 -20 L0 0 L-35 -20 Z" fill="#FDBA74"/>
+      <path d="M-35 -20 L0 0 L0 40 L-35 20 Z" fill="#F97316"/>
+      <path d="M0 0 L35 -20 L35 20 L0 40 Z" fill="#C2410C"/>
+    </g>
+    <!-- 活板门 -->
+    <rect x="200" y="170" width="100" height="22" rx="3" fill="#A0703F" stroke="#6B4423" stroke-width="2"/>
+    <line x1="250" y1="170" x2="250" y2="192" stroke="#6B4423" stroke-width="2"/>
+  </g>
+
+  <!-- 中间：Fabric 画面层 -->
+  <g transform="translate(270 150) skewY(12)">
+    <rect width="340" height="230" rx="10" fill="#F5F0E3" stroke="#B9AB88" stroke-width="3"/>
+    <text class="ptitle" x="16" y="28" fill="#7A6A44">Fabric Runtime</text>
+    <!-- 蓝色测试方块 -->
+    <g transform="translate(210 140)">
+      <path d="M0 -40 L35 -20 L0 0 L-35 -20 Z" fill="#93C5FD"/>
+      <path d="M-35 -20 L0 0 L0 40 L-35 20 Z" fill="#3B82F6"/>
+      <path d="M0 0 L35 -20 L35 20 L0 40 Z" fill="#1D4ED8"/>
+    </g>
+    <!-- 门 -->
+    <rect x="60" y="70" width="56" height="120" rx="3" fill="#A0703F" stroke="#6B4423" stroke-width="2"/>
+    <rect x="70" y="82" width="36" height="40" fill="none" stroke="#6B4423" stroke-width="2"/>
+    <rect x="70" y="134" width="36" height="44" fill="none" stroke="#6B4423" stroke-width="2"/>
+    <circle cx="106" cy="130" r="3" fill="#3A2412"/>
+  </g>
+
+  <!-- 最前：交互层（半透明） -->
+  <g transform="translate(90 200) skewY(12)">
+    <rect width="340" height="230" rx="10" fill="#EAF2FF" fill-opacity="0.55" stroke="#57606a" stroke-width="3" stroke-dasharray="10 6"/>
+    <text class="ptitle" x="16" y="28" fill="#24292f">交互</text>
+    <!-- 准星 -->
+    <g stroke="#24292f" stroke-width="3" stroke-linecap="round">
+      <line x1="170" y1="98" x2="170" y2="122"/>
+      <line x1="158" y1="110" x2="182" y2="110"/>
+    </g>
+    <!-- 快捷栏 -->
+    <g fill="#ffffff" fill-opacity="0.7" stroke="#24292f" stroke-width="2">
+      <rect x="62" y="186" width="24" height="24"/><rect x="86" y="186" width="24" height="24"/>
+      <rect x="110" y="186" width="24" height="24"/><rect x="134" y="186" width="24" height="24"/>
+      <rect x="158" y="186" width="24" height="24"/><rect x="182" y="186" width="24" height="24"/>
+      <rect x="206" y="186" width="24" height="24"/><rect x="230" y="186" width="24" height="24"/>
+      <rect x="254" y="186" width="24" height="24"/>
+    </g>
+    <rect x="86" y="184" width="24" height="28" fill="none" stroke="#E5383B" stroke-width="3"/>
+    <!-- 鼠标指针 -->
+    <path d="M232 92 L232 128 L241 119 L248 134 L254 131 L247 117 L259 117 Z" fill="#ffffff" stroke="#24292f" stroke-width="2" stroke-linejoin="round"/>
+  </g>
+
+  <!-- 底部标注 -->
+  <path class="lead" d="M260 470 V540"/>
+  <text class="tag" x="260" y="566">交互</text>
+  <text class="tagsub" x="260" y="588">输入 · 准星 · 界面</text>
+
+  <path class="lead" d="M440 420 V540"/>
+  <text class="tag" x="440" y="566">Fabric</text>
+  <text class="tagsub" x="440" y="588">原生 Fabric Mod</text>
+
+  <path class="lead" d="M620 370 V540"/>
+  <text class="tag" x="620" y="566">NeoForge</text>
+  <text class="tagsub" x="620" y="588">原生 NeoForge Mod</text>
+</svg>

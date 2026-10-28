@@ -1,0 +1,69 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 760 470" width="760" height="470" role="img" aria-label="Fabric 进程与 NeoForge 进程各自运行原生 Mod，共享相机、方块与交互，合成为一个窗口">
+  <style>
+    .bg { fill: #ffffff; }
+    .h { font: 700 19px "Segoe UI", "Microsoft YaHei", "PingFang SC", "Noto Sans CJK SC", sans-serif; text-anchor: middle; fill: #24292f; }
+    .t { font: 15px "Segoe UI", "Microsoft YaHei", "PingFang SC", "Noto Sans CJK SC", sans-serif; text-anchor: middle; fill: #57606a; }
+    .w { font: 700 16px "Segoe UI", "Microsoft YaHei", "PingFang SC", "Noto Sans CJK SC", sans-serif; text-anchor: middle; fill: #24292f; }
+    .line { stroke: #8c959f; stroke-width: 2.5; fill: none; }
+    .arrow { fill: #8c959f; }
+    .bus { fill: #F6F8FA; stroke: #8c959f; stroke-width: 2; }
+    .win { fill: #ffffff; stroke: #24292f; stroke-width: 2.5; }
+    .winbar { fill: #EAEEF2; stroke: #24292f; stroke-width: 2.5; }
+    @media (prefers-color-scheme: dark) {
+      .bg { fill: #0d1117; }
+      .h, .w { fill: #e6edf3; }
+      .t { fill: #9198a1; }
+      .line { stroke: #6e7681; }
+      .arrow { fill: #6e7681; }
+      .bus { fill: #161b22; stroke: #6e7681; }
+      .win { fill: #161b22; stroke: #c9d1d9; }
+      .winbar { fill: #21262d; stroke: #c9d1d9; }
+    }
+  </style>
+  <rect class="bg" width="760" height="470" rx="16"/>
+
+  <!-- 两个进程 -->
+  <rect x="50" y="30" width="270" height="110" rx="12" fill="#F5F0E3" stroke="#B9AB88" stroke-width="3"/>
+  <text class="h" x="185" y="70" style="fill:#5C4F2E">Fabric 进程</text>
+  <text class="t" x="185" y="98" style="fill:#7A6A44">Minecraft + Fabric Loader</text>
+  <text class="t" x="185" y="120" style="fill:#7A6A44">只加载原生 Fabric Mod</text>
+
+  <rect x="440" y="30" width="270" height="110" rx="12" fill="#FFF2E3" stroke="#E68A2E" stroke-width="3"/>
+  <text class="h" x="575" y="70" style="fill:#8A4A0C">NeoForge 进程</text>
+  <text class="t" x="575" y="98" style="fill:#B4610F">Minecraft + NeoForge</text>
+  <text class="t" x="575" y="120" style="fill:#B4610F">只加载原生 NeoForge Mod</text>
+
+  <!-- 汇合到共享层 -->
+  <path class="line" d="M185 140 V170 Q185 186 201 186 H330"/>
+  <path class="line" d="M575 140 V170 Q575 186 559 186 H430"/>
+  <rect class="bus" x="200" y="166" width="360" height="44" rx="22"/>
+  <text class="w" x="380" y="194">共享相机 · 方块状态 · 交互路由</text>
+
+  <path class="line" d="M380 210 V246"/>
+  <path class="arrow" d="M370 244 L390 244 L380 258 Z"/>
+
+  <!-- 一个窗口 -->
+  <rect class="win" x="180" y="266" width="400" height="180" rx="10"/>
+  <path class="winbar" d="M180 276 Q180 266 190 266 H570 Q580 266 580 276 V296 H180 Z"/>
+  <circle cx="200" cy="281" r="5" fill="#E5383B"/>
+  <circle cx="218" cy="281" r="5" fill="#F5B32F"/>
+  <circle cx="236" cy="281" r="5" fill="#3FB950"/>
+  <text class="w" x="380" y="287" style="font-size:14px">你看到的：一个窗口，一个世界</text>
+
+  <!-- 窗口里的场景 -->
+  <path d="M200 420 H560" stroke="#3FB950" stroke-width="4" stroke-linecap="round"/>
+  <g transform="translate(320 382)">
+    <path d="M0 -34 L30 -17 L0 0 L-30 -17 Z" fill="#93C5FD"/>
+    <path d="M-30 -17 L0 0 L0 34 L-30 17 Z" fill="#3B82F6"/>
+    <path d="M0 0 L30 -17 L30 17 L0 34 Z" fill="#1D4ED8"/>
+  </g>
+  <g transform="translate(440 382)">
+    <path d="M0 -34 L30 -17 L0 0 L-30 -17 Z" fill="#FDBA74"/>
+    <path d="M-30 -17 L0 0 L0 34 L-30 17 Z" fill="#F97316"/>
+    <path d="M0 0 L30 -17 L30 17 L0 34 Z" fill="#C2410C"/>
+  </g>
+  <g stroke="#57606a" stroke-width="2.5" stroke-linecap="round">
+    <line x1="380" y1="336" x2="380" y2="352"/>
+    <line x1="372" y1="344" x2="388" y2="344"/>
+  </g>
+</svg>
