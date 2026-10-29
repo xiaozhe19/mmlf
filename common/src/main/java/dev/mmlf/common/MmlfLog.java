@@ -22,7 +22,8 @@ public final class MmlfLog {
   samples.clear();
   info("logging","configured",Map.of("level",threshold.name(),"file",id+".jsonl"));
  }
- public static String configuredLevel() {return System.getProperty("mmlf.logLevel",System.getenv().getOrDefault("MMLF_LOG_LEVEL","DEBUG"));}
+ /** INFO unless asked otherwise: release jars never log at DEBUG by themselves; development runs ask for it. */
+ public static String configuredLevel() {return System.getProperty("mmlf.logLevel",System.getenv().getOrDefault("MMLF_LOG_LEVEL","INFO"));}
  public static void debug(String module,String event,Map<String,?> fields) { write(Level.DEBUG,module,event,fields); }
  public static void info(String module,String event,Map<String,?> fields) { write(Level.INFO,module,event,fields); }
  public static void warn(String module,String event,Map<String,?> fields) { write(Level.WARN,module,event,fields); }

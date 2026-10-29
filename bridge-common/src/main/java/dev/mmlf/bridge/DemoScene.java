@@ -37,7 +37,7 @@ public final class DemoScene {
   }
   mc.options.pauseOnLostFocus=false;
 
-  if(!started && mc.screen!=null && mc.screen.getClass().getSimpleName().equals("AccessibilityOnboardingScreen")) mc.setScreen(new net.minecraft.client.gui.screens.TitleScreen());
+  if(!started && mc.screen instanceof net.minecraft.client.gui.screens.AccessibilityOnboardingScreen) mc.setScreen(new net.minecraft.client.gui.screens.TitleScreen());
   // The primary opens its world only when a background runtime has loaded its own, so both appear together.
   if(!started && !skipWait && BridgeCore.isPrimary() && mc.level==null && !BridgeCore.remoteWorldReady()) {
    if(mc.screen instanceof net.minecraft.client.gui.screens.TitleScreen) mc.setScreen(new WaitingScreen(()->{skipWait=true;mc.setScreen(new net.minecraft.client.gui.screens.TitleScreen());}));

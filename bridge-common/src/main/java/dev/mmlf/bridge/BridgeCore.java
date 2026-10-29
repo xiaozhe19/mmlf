@@ -96,9 +96,31 @@ public final class BridgeCore {
         String id=System.getProperty("mmlf.runtime",loader);
         if (sessionPath==null || sessionPath.isBlank()) {
             Path hosted=SessionBootstrap.hostIfRequested(id);
+            if(hosted==null && SessionBootstrap.release()) { releaseRuntime=id; System.out.println("MMLF: release build; session starts with the game"); return; }
             if(hosted==null) { System.out.println("MMLF: no session configured; bridge inactive"); return; }
             sessionPath=hosted.toString();
         }
+        join(sessionPath,id,loader);
+    }
+    private static String releaseRuntime;
+    private static int remoteErrorTick;
+    private static java.util.concurrent.CompletableFuture<Path> releaseSession;
+    /** Release builds join their session once the game is up; a launcher or version the manager cannot use is reported, and the game plays on alone. */
+    private static void joinRelease(Minecraft mc) {
+        if(releaseSession==null) {
+            SessionStatus.begin(remoteOf(releaseRuntime),mc.gameDirectory.toPath());
+            releaseSession=ReleaseSession.start(mc,releaseRuntime);
+        }
+        if(!releaseSession.isDone()) return;
+        String id=releaseRuntime; releaseRuntime=null;
+        try { join(releaseSession.join().toString(),id,id); }
+        catch(java.util.concurrent.CompletionException e) {
+            Throwable cause=e.getCause()==null?e:e.getCause();
+            SessionStatus.fail(cause.getMessage()==null?cause.toString():cause.getMessage(),mc.gameDirectory.toPath().resolve("mmlf"));
+        }
+    }
+    private static String remoteOf(String id) { return id.equals("fabric")?"neoforge":"fabric"; }
+    private static void join(String sessionPath,String id,String loader) {
         try {
             session=Session.read(Path.of(sessionPath));
             sessionIdentity=session.identity();
@@ -108,9 +130,13 @@ public final class BridgeCore {
             RemoteItems.initialize(link,primary);
             InventoryBridge.initialize(link.id,primary);
             link.start();
+            if(primary) SessionStatus.launched(remoteOf(id),session.root().resolve(remoteOf(id)+".log"));
             Runtime.getRuntime().addShutdownHook(new Thread(()->{ link.close(); try { if(poseFile!=null) poseFile.close(); } catch(java.io.IOException ignored) {} },"mmlf-shutdown"));
             System.out.println("MMLF bridge initialized: "+id);
-        } catch(Exception e) { System.err.println("MMLF session initialization failed: "+e); }
+        } catch(Exception e) {
+            System.err.println("MMLF session initialization failed: "+e);
+            SessionStatus.fail("MMLF 会话初始化失败："+e,Path.of(sessionPath).getParent());
+        }
     }
     private static void receive(Wire message) {
         Minecraft mc=Minecraft.getInstance();
@@ -147,6 +173,10 @@ public final class BridgeCore {
                 return;
             }
             if(event.topic().equals("mmlf:session_end")) { if(!primary) mc.execute(()->stopBackground(mc,"session_end")); return; }
+            if(event.topic().equals("mmlf:world") || event.topic().equals("mmlf:world_closed")) {
+                if(!primary && message.source().equals(session.primary()) && WorldFollow.enabled(session)) WorldFollow.receive(mc,event.topic(),event.values());
+                return;
+            }
             if(event.topic().equals("mmlf:world_ready")) { readyRuntimes.add(message.source()); MmlfLog.info("connection","runtime_world_ready",Map.of("runtime",message.source())); return; }
             if(event.topic().equals("mmlf:held")) {if(!primary) { primaryGrounded=!"false".equals(event.values().get("grounded")); mc.execute(()->RemoteItems.updateHeld(event.values().get("item"),event.values().get("slot"))); } return;}
             if(event.topic().equals("mmlf:picked")) {RemoteItems.receive(message);return;}
@@ -162,7 +192,19 @@ public final class BridgeCore {
         }
     }
     public static void tick(Minecraft mc) {
+        if(releaseRuntime!=null) joinRelease(mc);
+        if(link!=null && primary && !SessionStatus.failed() && ++remoteErrorTick%20==0) {
+            Path error=session.root().resolve("remote-error.txt");
+            if(java.nio.file.Files.isRegularFile(error)) {
+                String text;
+                try { text=java.nio.file.Files.readString(error,java.nio.charset.StandardCharsets.UTF_8).trim(); } catch(java.io.IOException e) { text="远端启动失败，详见 "+error; }
+                SessionStatus.fail(text,session.root());
+            }
+        }
+        if(link!=null && primary) SessionStatus.tick(mc,peers.stream().anyMatch(p->!p.equals(link.id)),!readyRuntimes.isEmpty(),WorldFollow.enabled(session));
+        else if(releaseRuntime!=null) SessionStatus.tick(mc,false,false,false);
         if(link!=null) DemoScene.tick(mc,session,link.id);
+        if(link!=null && link.ready() && WorldFollow.enabled(session)) WorldFollow.tick(mc,primary);
         if(link!=null && !primary) {
             if(!backgroundMusicStopped) {
                 mc.getSoundManager().stop(null,net.minecraft.sounds.SoundSource.MUSIC);
@@ -180,6 +222,8 @@ public final class BridgeCore {
             try { poseFile=primary ? PoseFile.publisher(session.posePath(),session.token()) : PoseFile.reader(session.posePath(),session.token()); }
             catch(java.io.IOException e) { MmlfLog.sampled("camera","pose_file_unavailable",5000,Map.of("primary",primary,"reason",e.toString())); }
         }
+        if(link!=null && link.ready() && primary) sendLanguage(mc);
+        if(link!=null && !primary && pendingLanguage!=null) followLanguage(mc,pendingLanguage,session.primary());
         if(link==null || !link.ready() || mc.player==null || mc.level==null) return;
         if(!worldReadySent) { worldReadySent=true; link.send("event","*",new Event("mmlf:world_ready",Map.of())); }
         // The primary decides when the game pauses; a background that paused on lost focus would stop its server.
@@ -218,14 +262,19 @@ public final class BridgeCore {
                 link.send("event","*",new Event("mmlf:held",Map.of("item",item,"slot",Integer.toString(slot),"grounded",Boolean.toString(mc.player.onGround()))));
                 MmlfLog.debug("render.items","held_sync",Map.of("remote",RemoteItemRef.parse(item).isPresent(),"slot",slot));
             }
-            // Owners run native logic for the same player: its language and game mode follow the primary's, so names,
-            // screens and whether a use consumes the item match what the player sees here.
-            String language=mc.options.languageCode, mode=mc.gameMode==null?"survival":mc.gameMode.getPlayerMode().getName();
-            if(!(language+"|"+mode).equals(lastLanguage) || now-languageSent>5_000_000_000L) {
-                lastLanguage=language+"|"+mode;languageSent=now;
-                link.send("event","*",new Event("mmlf:language",Map.of("code",language,"gameMode",mode)));
-            }
-
+        }
+    }
+    /**
+     * Owners run native logic for the same player: its language and game mode follow the primary's, so names, screens and
+     * whether a use consumes the item match what the player sees here. Sent from the menus too, so a background has
+     * switched language before it opens a world rather than reloading its resources in the middle of loading one.
+     */
+    private static void sendLanguage(Minecraft mc) {
+        long now=System.nanoTime();
+        String language=mc.options.languageCode, mode=mc.gameMode==null?"survival":mc.gameMode.getPlayerMode().getName();
+        if(!(language+"|"+mode).equals(lastLanguage) || now-languageSent>5_000_000_000L) {
+            lastLanguage=language+"|"+mode;languageSent=now;
+            link.send("event","*",new Event("mmlf:language",Map.of("code",language,"gameMode",mode)));
         }
     }
     public static void publishCamera(Camera camera, float worldFov) {
@@ -257,6 +306,10 @@ public final class BridgeCore {
     }
     public static boolean isPrimary() { return primary; }
     private static boolean languageReloading;
+    /** A language that arrived while a world was loading; switching then never finishes (see {@link #followLanguage}). */
+    private static String pendingLanguage;
+    /** Background: a language switch is running or waiting, so it opens no world until it is done. */
+    static boolean languageBusy() { return languageReloading || pendingLanguage!=null; }
     /** Owner: the bridge player plays in the primary player's game mode. */
     private static void followGameMode(Minecraft mc,String mode) {
         var server=mc.getSingleplayerServer(); if(mode==null || server==null) return;
@@ -271,7 +324,13 @@ public final class BridgeCore {
     }
     /** Owner: switches to the primary's language, then sends a fresh catalogue so names and tabs follow. */
     private static void followLanguage(Minecraft mc,String code,String primaryId) {
-        if(code==null || languageReloading || code.equals(mc.options.languageCode) || mc.getLanguageManager().getLanguage(code)==null) return;
+        if(code==null || languageReloading || code.equals(mc.options.languageCode) || mc.getLanguageManager().getLanguage(code)==null) { pendingLanguage=null; return; }
+        // A resource reload started while a world loads never completes, and the world load waits for it: the client
+        // would never join its own server. Only the title screen and a joined world are safe.
+        boolean settled=mc.level==null ? mc.screen instanceof net.minecraft.client.gui.screens.TitleScreen
+            : mc.player!=null && !(mc.screen instanceof net.minecraft.client.gui.screens.ReceivingLevelScreen);
+        if(!settled) { pendingLanguage=code; return; }
+        pendingLanguage=null;
         MmlfLog.info("connection","language_follow",Map.of("from",mc.options.languageCode,"to",code));
         languageReloading=true;
         mc.getLanguageManager().setSelected(code); mc.options.languageCode=code;
@@ -382,6 +441,10 @@ public final class BridgeCore {
         return Math.toDegrees(2*Math.atan(Math.tan(Math.toRadians(pose.fov())/2)*scale));
     }
     /** True once another runtime has a loaded world. */
+    /** A background left its world to follow the primary; it announces readiness again in the next one. */
+    static void worldLeft() { worldReadySent=false; }
+    /** Primary: it closed its world, so the backgrounds close theirs and report readiness again in the next one. */
+    static void remoteWorldsClosed() { readyRuntimes.clear(); }
     public static boolean remoteWorldReady() { return !readyRuntimes.isEmpty(); }
     public static int peerCount() { return peers.size(); }
     /**

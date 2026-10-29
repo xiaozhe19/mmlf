@@ -11,6 +11,6 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
  */
 @Mixin(InputConstants.class)
 public abstract class HostedKeyStateMixin {
- @Inject(method="isKeyDown",at=@At("HEAD"),cancellable=true,remap=false)
+ @Inject(method="isKeyDown",at=@At("HEAD"),cancellable=true)
  private static void mmlf$held(long window,int key,CallbackInfoReturnable<Boolean> ci) { if(GuiHost.keyHeld(key)) ci.setReturnValue(true); }
 }

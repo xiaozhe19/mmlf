@@ -23,7 +23,8 @@
     "CreativeTabsAccessor",
     "CreativeTabMixin",
     "GameModeAccessor",
-    "FollowedGroundMixin"
+    "FollowedGroundMixin",
+    "GuiMixin"
   ],
   "injectors": {
     "defaultRequire": 1

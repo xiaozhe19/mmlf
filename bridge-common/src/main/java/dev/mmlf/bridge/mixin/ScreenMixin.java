@@ -12,7 +12,7 @@ public abstract class ScreenMixin {
  @Inject(method="renderWithTooltip",at=@At("HEAD"))
  private void mmlf$begin(GuiGraphics graphics,int x,int y,float delta,CallbackInfo ci) { GuiHost.beginCapture((Screen)(Object)this,graphics); }
  @Inject(method="renderWithTooltip",at=@At("RETURN"))
- private void mmlf$end(GuiGraphics graphics,int x,int y,float delta,CallbackInfo ci) { GuiHost.endCapture((Screen)(Object)this,graphics); }
+ private void mmlf$end(GuiGraphics graphics,int x,int y,float delta,CallbackInfo ci) { GuiHost.endCapture((Screen)(Object)this,graphics); dev.mmlf.bridge.SessionStatus.render(graphics); }
  /** Blurring rebinds the main target and would read this runtime's world; the primary draws its own background. */
  @Inject(method="renderBlurredBackground",at=@At("HEAD"),cancellable=true)
  private void mmlf$blur(float delta,CallbackInfo ci) { if(GuiHost.capturing()) ci.cancel(); }

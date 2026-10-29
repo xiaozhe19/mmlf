@@ -1,5 +1,6 @@
 plugins { id 'fabric-loom' version '1.8.13' }
 def mmlfRoot = rootDir.absolutePath
+def devLogLevel = System.getenv('MMLF_LOG_LEVEL') ?: 'DEBUG'
 def runtimeId = System.getenv('MMLF_RUNTIME_ID') ?: 'fabric'
 if (!(runtimeId ==~ /[a-zA-Z0-9_-]{1,48}/)) throw new GradleException('Invalid MMLF_RUNTIME_ID')
 base { archivesName = 'mmlf-fabric-bridge' }
@@ -30,6 +31,7 @@ loom {
             if (System.getenv('MMLF_SESSION')) vmArg "-Dmmlf.session=${System.getenv('MMLF_SESSION')}"
             vmArg "-Dmmlf.runtime=${runtimeId}"
             vmArg "-Dmmlf.root=${mmlfRoot}"
+            vmArg "-Dmmlf.logLevel=${devLogLevel}"
             vmArg '-Dorg.lwjgl.system.SharedLibraryExtractPath=' + file('run/natives-fabric').absolutePath
         }
     }
@@ -43,6 +45,8 @@ tasks.register('stageHostMods', JavaExec) {
     args rootProject.file('mmlf/mods').absolutePath, 'fabric', file('run/mods').absolutePath
 }
 tasks.named('runClient') { dependsOn ':fabric-test-mod:classes', 'stageHostMods' }
+// Only the jar carries the session manager: development runs host sessions through Gradle instead.
+tasks.named('jar') { from(project(':launcher').tasks.named('managerJar')) { into 'META-INF/mmlf'; rename { 'mmlf-manager.jar' } } }
 
 
 

@@ -1,5 +1,6 @@
 plugins { id 'net.neoforged.moddev' version '2.0.78' }
 def mmlfRoot = rootDir.absolutePath
+def devLogLevel = System.getenv('MMLF_LOG_LEVEL') ?: 'DEBUG'
 base { archivesName = 'mmlf-neoforge-bridge' }
 sourceSets.main.java.srcDir '../bridge-common/src/main/java'
 sourceSets.main.java.srcDir '../common/src/main/java'
@@ -22,6 +23,7 @@ neoForge {
             if (System.getenv('MMLF_SESSION')) systemProperty 'mmlf.session', System.getenv('MMLF_SESSION')
             systemProperty 'mmlf.runtime', 'neoforge'
             systemProperty 'mmlf.root', mmlfRoot
+            systemProperty 'mmlf.logLevel', devLogLevel
             systemProperty 'org.lwjgl.system.SharedLibraryExtractPath', file('run/natives-neoforge').absolutePath
         }
     }
@@ -38,6 +40,8 @@ tasks.register('stageHostMods', JavaExec) {
     args rootProject.file('mmlf/mods').absolutePath, 'neoforge', file('run/mods').absolutePath
 }
 tasks.named('runClient') { dependsOn ':neoforge-test-mod:classes', 'stageHostMods' }
+// Only the jar carries the session manager: development runs host sessions through Gradle instead.
+tasks.named('jar') { from(project(':launcher').tasks.named('managerJar')) { into 'META-INF/mmlf'; rename { 'mmlf-manager.jar' } } }
 
 
 

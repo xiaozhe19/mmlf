@@ -4,3 +4,15 @@ application { mainClass = 'dev.mmlf.launcher.Launcher' }
 
 
 tasks.named('run') { workingDir rootProject.projectDir }
+
+// The release session manager, self-contained: each release mod jar carries it and starts it beside the game.
+tasks.register('managerJar', Jar) {
+    archiveBaseName = 'mmlf-manager'
+    manifest { attributes 'Main-Class': 'dev.mmlf.launcher.Manager' }
+    from sourceSets.main.output
+    dependsOn configurations.runtimeClasspath
+    from({ configurations.runtimeClasspath.collect { it.isDirectory() ? it : zipTree(it) } }) {
+        exclude 'META-INF/*.SF', 'META-INF/*.DSA', 'META-INF/*.RSA', 'META-INF/versions/*/module-info.class', 'module-info.class'
+    }
+    duplicatesStrategy = DuplicatesStrategy.EXCLUDE
+}

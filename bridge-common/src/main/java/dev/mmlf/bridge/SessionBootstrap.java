@@ -33,4 +33,9 @@ final class SessionBootstrap {
         }
     }
     static boolean hosting() { return host!=null; }
+    /** A release jar outside the development project: the session manager it carries starts the session instead. */
+    static boolean release() {
+        String root=System.getProperty("mmlf.root");
+        return (root==null || root.isBlank()) && ReleaseSession.bundled();
+    }
 }
