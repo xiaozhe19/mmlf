@@ -3,7 +3,7 @@ loaderVersion="[4,)"
 license="MIT"
 [[mods]]
 modId="mmlf_bridge"
-version="0.1.0"
+version="1.0.0-demo"
 displayName="MMLF NeoForge Bridge"
 [[dependencies.mmlf_bridge]]
 modId="neoforge"

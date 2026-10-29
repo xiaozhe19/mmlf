@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
   "id": "mmlf_bridge",
-  "version": "0.1.0",
+  "version": "1.0.0-demo",
   "name": "MMLF Fabric Bridge",
   "environment": "client",
   "entrypoints": {

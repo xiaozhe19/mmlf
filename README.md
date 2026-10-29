@@ -15,9 +15,9 @@
 ![NeoForge](https://img.shields.io/badge/NeoForge-21.1.265-E68A2E?style=flat-square)
 ![Java](https://img.shields.io/badge/JDK-21-ED8B00?style=flat-square&logo=openjdk&logoColor=white)
 ![Platform](https://img.shields.io/badge/Platform-Windows_10%2F11-0078D4?style=flat-square)
-![Status](https://img.shields.io/badge/Status-Demo_1-orange?style=flat-square)
+![Release](https://img.shields.io/badge/Release-Demo_1.0-orange?style=flat-square)
 
-[它是什么](#about) · [效果](#features) · [快速开始](#quick-start) · [工作原理](#how-it-works) · [已知限制](#limitations) · [路线图](#roadmap)
+[它是什么](#about) · [效果](#features) · [如何体验](#try) · [从源码运行](#quick-start) · [工作原理](#how-it-works) · [已知限制](#limitations) · [路线图](#roadmap)
 
 </div>
 
@@ -64,9 +64,64 @@ Fabric 和 NeoForge 是两套互不兼容的 Mod 加载器，转译类方案（�
 
 ---
 
+<a id="try"></a>
+
+## 🎮 如何体验（Demo 1.0）
+
+不需要构建，用你平时的启动器就能玩。发行版是两个 Mod JAR，各放进一个版本即可：
+
+| 文件 | 放进 |
+|---|---|
+| `mmlf-fabric-1.0.0-demo.jar` | Minecraft 1.21.1 **Fabric** 版本的 `mods` |
+| `mmlf-neoforge-1.0.0-demo.jar` | Minecraft 1.21.1 **NeoForge** 版本的 `mods` |
+
+从 [Releases](https://github.com/xiaozhe19/mmlf/releases) 页面下载；也可以自己构建：`./gradlew.bat release`，产物在 `build/release/`。
+
+### 1. 在同一个启动器里装好两个版本
+
+支持 **PCL**、**HMCL** 和 **官方启动器**（其他启动器会被拒绝）。在**同一个** `.minecraft` 下安装：
+
+- Minecraft 1.21.1 + Fabric Loader（≥ 0.16.10），并放入 [Fabric API](https://modrinth.com/mod/fabric-api)
+- Minecraft 1.21.1 + NeoForge 21.1.x
+
+> [!IMPORTANT]
+> 两个版本的 `mods` 必须分开：PCL / HMCL 请开启**版本隔离**（默认开启），Mod 放在 `.minecraft/versions/<版本名>/mods`。官方启动器请把每个安装配置的「游戏目录」设为 `.minecraft/versions/<版本名>`。
+>
+> 每个版本先单独启动一次，让启动器补全文件。
+
+### 2. 放入 MMLF 和你想融合的 Mod
+
+把两个 MMLF JAR 分别放进对应版本的 `mods`。其他 Mod 照常放进它所属加载器的版本里，例如：
+
+- Fabric 版本：[Macaw's Doors](https://modrinth.com/mod/macaws-doors)、[Tom's Simple Storage](https://modrinth.com/mod/toms-storage)
+- NeoForge 版本：[Macaw's Trapdoors](https://modrinth.com/mod/macaws-trapdoors)、[Farmer's Delight](https://modrinth.com/mod/farmers-delight)
+
+### 3. 启动其中任意一个
+
+1. 启动 Fabric 或 NeoForge 版本，它就是主窗口。左上角的状态面板会显示另一端的启动进度（查找版本 → 检查模组 → 后台启动），另一端的窗口始终隐藏。
+2. 进入任意**单人**存档。另一端会在后台打开一个同名、同种子的影子世界；加载期间主窗口会暂停并显示进度，就绪后自动继续（也可以点「直接进入」先玩）。
+3. 用两边 Mod 的物品建造、交互，两个加载器的内容出现在同一个画面里。关闭主窗口后，后台一端几秒内自动退出。
+
+**可以试试：** 创造模式物品栏里能找到另一端的物品；右键 Farmer's Delight 厨锅或 Tom's Storage 终端打开另一端的原生界面；开关两边的门和活板门。
+
+<details>
+<summary><b>🩺 出问题了？</b></summary>
+
+- 另一端启动失败时，主窗口会弹出错误界面，给出原因和日志位置，可选择「继续（不使用远端）」。
+- 日志在主端游戏目录的 `mmlf/sessions/session-*/` 下（`manager.log`、`<fabric|neoforge>.log`）；后台一端的游戏目录和影子世界在 `mmlf/<fabric|neoforge>/`。
+- 常见原因：另一个加载器的版本没装或文件不全、对端 `mods` 里缺少 MMLF JAR、两个版本的 Minecraft 版本不一致。
+- 两个客户端会同时运行，后台一端使用和主窗口相同的最大内存，请确认内存足够。
+
+</details>
+
+> [!WARNING]
+> Demo 1.0 是早期演示版：只支持单人世界（多人服务器中另一端停在标题画面）；发行版目前主要在 PCL 上测试过，官方启动器和 HMCL 尚未完整验证；影子世界只同步种子和平地/普通类型，改变地形生成的 Mod 或数据包会导致两端原版地形不一致。另见[已知限制](#limitations)。
+
+---
+
 <a id="quick-start"></a>
 
-## 🚀 快速开始
+## 🛠️ 从源码运行（开发演示场景）
 
 ### 环境要求
 
