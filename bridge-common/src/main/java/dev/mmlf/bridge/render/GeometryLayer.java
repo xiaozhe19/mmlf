@@ -5,6 +5,7 @@ import com.mojang.blaze3d.systems.RenderSystem;
 import com.mojang.blaze3d.vertex.*;
 import dev.mmlf.bridge.BridgeCore;
 import dev.mmlf.common.MmlfLog;
+import dev.mmlf.common.RenderSectionStore;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.renderer.RenderType;
 import net.minecraft.client.renderer.texture.TextureAtlas;
@@ -29,11 +30,8 @@ import java.util.concurrent.ConcurrentHashMap;
  */
 public final class GeometryLayer {
  private GeometryLayer() {}
- private record Layer(String renderType,int vertexCount,byte[] vertices) {}
- private record Section(long capturedMs,List<Layer> layers) {}
- /** Background: section key -> latest compiled meshes, written by section compile workers. */
- private static final Map<Long,Section> captured=new ConcurrentHashMap<>();
- private static volatile long capturedVersion;
+ /** Both roles submit section meshes; the far role currently exports its snapshot for research. */
+ private static final RenderSectionStore submissions=new RenderSectionStore();
  private static long exportedVersion,lastExport,exports,exportBytesTotal;
  private static boolean atlasWritten,unsupportedLogged;
  /** Primary: uploaded remote sections by render type. */
@@ -48,9 +46,8 @@ public final class GeometryLayer {
 
  /** Called on a section compile worker with the compiler's results, before they are uploaded. */
  public static void captured(SectionPos section,Map<RenderType,MeshData> layers) {
-  if(BridgeCore.isPrimary()) return;
   long started=System.nanoTime();
-  var copies=new ArrayList<Layer>();
+  var copies=new ArrayList<RenderSectionStore.Layer>();
   for(var entry:layers.entrySet()) {
    MeshData.DrawState state=entry.getValue().drawState();
    if(state.format()!=DefaultVertexFormat.BLOCK || state.mode()!=VertexFormat.Mode.QUADS) {
@@ -60,10 +57,9 @@ public final class GeometryLayer {
    ByteBuffer source=entry.getValue().vertexBuffer();
    byte[] bytes=new byte[state.vertexCount()*DefaultVertexFormat.BLOCK.getVertexSize()];
    source.duplicate().get(bytes);
-   copies.add(new Layer(name(entry.getKey()),state.vertexCount(),bytes));
+   copies.add(new RenderSectionStore.Layer(name(entry.getKey()),state.vertexCount(),bytes));
   }
-  captured.put(section.asLong(),new Section(System.currentTimeMillis(),copies));
-  capturedVersion++;
+  submissions.submit(section.asLong(),System.currentTimeMillis(),copies);
   MmlfLog.sampled("experiment","geometry_capture",2000,Map.of("section",section.toString(),"layers",copies.size(),"copyMicros",(System.nanoTime()-started)/1000));
  }
  private static String name(RenderType type) {
@@ -79,27 +75,28 @@ public final class GeometryLayer {
   if(BridgeCore.isPrimary()) { poll(); return; }
   if(!atlasWritten) writeAtlas(mc);
   long now=System.currentTimeMillis();
-  long version=capturedVersion;
+  var snapshot=submissions.snapshot();
+  long version=snapshot.revision();
   if(version==exportedVersion || now-lastExport<250) return;
-  exportedVersion=version; lastExport=now;
+  lastExport=now;
   long started=System.nanoTime();
   try {
    var bytes=new ByteArrayOutputStream();
    var out=new DataOutputStream(bytes);
    int sections=0,vertices=0; long newest=0;
-   var snapshot=new HashMap<>(captured);
-   for(Section section:snapshot.values()) if(!section.layers().isEmpty()) sections++;
+   for(var section:snapshot.sections().values()) if(!section.layers().isEmpty()) sections++;
    out.writeInt(0x4D4D4C47); out.writeLong(now); out.writeInt(sections);
-   for(var entry:snapshot.entrySet()) {
-    Section section=entry.getValue(); if(section.layers().isEmpty()) continue;
+   for(var entry:snapshot.sections().entrySet()) {
+    var section=entry.getValue(); if(section.layers().isEmpty()) continue;
     newest=Math.max(newest,section.capturedMs());
     out.writeLong(entry.getKey()); out.writeLong(section.capturedMs()); out.writeInt(section.layers().size());
-    for(Layer layer:section.layers()) { out.writeUTF(layer.renderType()); out.writeInt(layer.vertexCount()); out.writeInt(layer.vertices().length); out.write(layer.vertices()); vertices+=layer.vertexCount(); }
+    for(var layer:section.layers()) { byte[] data=layer.vertices(); out.writeUTF(layer.renderType()); out.writeInt(layer.vertexCount()); out.writeInt(data.length); out.write(data); vertices+=layer.vertexCount(); }
    }
    out.flush();
    Path target=file(BridgeCore.runtimeId(),".geometry"),temp=file(BridgeCore.runtimeId(),".geometry.tmp");
    Files.write(temp,bytes.toByteArray());
    Files.move(temp,target,StandardCopyOption.REPLACE_EXISTING,StandardCopyOption.ATOMIC_MOVE);
+   exportedVersion=version;
    exports++; exportBytesTotal+=bytes.size();
    MmlfLog.info("experiment","geometry_export",Map.of("sections",sections,"vertices",vertices,"bytes",bytes.size(),"exportMicros",(System.nanoTime()-started)/1000,
     "newestCaptureAgeMs",newest==0?-1:now-newest,"exports",exports,"bytesTotal",exportBytesTotal));
