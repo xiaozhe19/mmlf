@@ -9,6 +9,7 @@ import net.minecraft.core.registries.BuiltInRegistries;
 public final class FabricBridge implements ClientModInitializer {
     public void onInitializeClient() {
         BridgeCore.initialize("fabric");
+        dev.mmlf.bridge.ItemAccess.install(new FabricItems());
         for(int i=0;i<RemoteCatalog.POOL;i++) Registry.register(BuiltInRegistries.CREATIVE_MODE_TAB,RemoteCatalog.poolKey(i),RemoteCatalog.buildPool(i,FabricItemGroup.builder()));
         ClientTickEvents.END_CLIENT_TICK.register(BridgeCore::tick);
     }

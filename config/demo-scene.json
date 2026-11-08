@@ -64,8 +64,14 @@
       "x": -6,
       "y": 101,
       "z": -3,
-      "properties": { "facing": "south" },
-      "items": ["minecraft:cobblestone*32", "minecraft:oak_log*16", "minecraft:iron_ingot*8"],
+      "properties": {
+        "facing": "south"
+      },
+      "items": [
+        "minecraft:cobblestone*32",
+        "minecraft:oak_log*16",
+        "minecraft:iron_ingot*8"
+      ],
       "optional": true
     },
     {
@@ -82,7 +88,9 @@
       "x": -4,
       "y": 101,
       "z": -3,
-      "properties": { "facing": "south" },
+      "properties": {
+        "facing": "south"
+      },
       "optional": true
     },
     {
@@ -91,7 +99,10 @@
       "x": 4,
       "y": 100,
       "z": -3,
-      "properties": { "facing": "south", "lit": "true" },
+      "properties": {
+        "facing": "south",
+        "lit": "true"
+      },
       "optional": true
     },
     {
@@ -100,8 +111,166 @@
       "x": 4,
       "y": 101,
       "z": -3,
-      "properties": { "facing": "south" },
+      "properties": {
+        "facing": "south"
+      },
       "optional": true
+    },
+    {
+      "runtime": "fabric",
+      "block": "mmlf_fabric_test:signal_block",
+      "x": -6,
+      "y": 100,
+      "z": -6
+    },
+    {
+      "runtime": "neoforge",
+      "block": "mmlf_neoforge_test:lamp_block",
+      "x": -5,
+      "y": 100,
+      "z": -6
+    },
+    {
+      "runtime": "neoforge",
+      "block": "mmlf_neoforge_test:signal_block",
+      "x": -3,
+      "y": 100,
+      "z": -6
+    },
+    {
+      "runtime": "fabric",
+      "block": "mmlf_fabric_test:lamp_block",
+      "x": -2,
+      "y": 100,
+      "z": -6
+    },
+    {
+      "runtime": "primary",
+      "block": "minecraft:lever",
+      "x": 0,
+      "y": 100,
+      "z": -6,
+      "properties": {
+        "face": "floor",
+        "facing": "east"
+      }
+    },
+    {
+      "runtime": "primary",
+      "block": "minecraft:redstone_wire",
+      "x": 1,
+      "y": 100,
+      "z": -6,
+      "properties": {
+        "east": "side",
+        "west": "side"
+      }
+    },
+    {
+      "runtime": "background",
+      "block": "mmlf_{background}_test:lamp_block",
+      "x": 2,
+      "y": 100,
+      "z": -6
+    },
+    {
+      "runtime": "background",
+      "block": "mmlf_{background}_test:signal_block",
+      "x": 4,
+      "y": 100,
+      "z": -6
+    },
+    {
+      "runtime": "primary",
+      "block": "minecraft:redstone_wire",
+      "x": 5,
+      "y": 100,
+      "z": -6,
+      "properties": {
+        "east": "side",
+        "west": "side"
+      }
+    },
+    {
+      "runtime": "primary",
+      "block": "minecraft:redstone_lamp",
+      "x": 6,
+      "y": 100,
+      "z": -6
+    },
+    {
+      "runtime": "background",
+      "block": "mmlf_{background}_test:signal_block",
+      "x": -2,
+      "y": 100,
+      "z": 7
+    },
+    {
+      "runtime": "primary",
+      "block": "minecraft:comparator",
+      "x": -1,
+      "y": 100,
+      "z": 7,
+      "properties": {
+        "facing": "west"
+      }
+    },
+    {
+      "runtime": "primary",
+      "block": "minecraft:campfire",
+      "x": 2,
+      "y": 100,
+      "z": 7,
+      "properties": {
+        "lit": "false"
+      }
+    },
+    {
+      "runtime": "background",
+      "block": "mmlf_{background}_test:probe_block",
+      "x": 2,
+      "y": 101,
+      "z": 7
+    },
+    {
+      "runtime": "background",
+      "block": "mmlf_{background}_test:crate_block",
+      "x": 5,
+      "y": 100,
+      "z": 7
+    },
+    {
+      "runtime": "primary",
+      "block": "minecraft:hopper",
+      "x": 5,
+      "y": 101,
+      "z": 7,
+      "properties": {
+        "facing": "down"
+      },
+      "items": [
+        "minecraft:cobblestone*8"
+      ]
+    },
+    {
+      "runtime": "background",
+      "block": "mmlf_{background}_test:crate_block",
+      "x": -5,
+      "y": 101,
+      "z": 7,
+      "items": [
+        "minecraft:emerald*4"
+      ]
+    },
+    {
+      "runtime": "primary",
+      "block": "minecraft:hopper",
+      "x": -5,
+      "y": 100,
+      "z": 7,
+      "properties": {
+        "facing": "east"
+      }
     }
   ]
 }

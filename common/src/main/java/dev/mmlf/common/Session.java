@@ -6,11 +6,15 @@ import java.net.URI;
 
 /** One fusion session. The primary runtime (main window and input) is chosen per session, never per loader. */
 public record Session(String uri, String token, String directory, String primary) {
+    /** Endpoint of a Coordinator serving runtimes in this JVM through {@link InJvm}. */
+    public static final String IN_JVM = "injvm://local";
+    public boolean inJvm() { return IN_JVM.equals(uri); }
     public static Session read(Path path) throws IOException {
         Session session = Wire.JSON.fromJson(Files.readString(path), Session.class);
         URI uri = URI.create(session.uri);
-        if (!"ws".equals(uri.getScheme()) || !"127.0.0.1".equals(uri.getHost()) || uri.getPort() < 1)
-            throw new IOException("MMLF requires a loopback WebSocket endpoint");
+        boolean loopback = "ws".equals(uri.getScheme()) && "127.0.0.1".equals(uri.getHost()) && uri.getPort() > 0;
+        if (!loopback && !IN_JVM.equals(session.uri))
+            throw new IOException("MMLF requires a loopback WebSocket or in-JVM endpoint");
         if (session.primary == null || !session.primary.matches("[a-zA-Z0-9_-]{1,48}"))
             throw new IOException("MMLF session does not name a primary runtime");
         return session;

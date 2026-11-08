@@ -4,8 +4,17 @@ import java.util.*;
 
 public final class Messages {
     private Messages() {}
-    public record Hello(String token, String loader, String minecraft, boolean primary) {}
-    public record Welcome(int slot, String primary, Set<String> runtimes) {}
+    /** {@code incarnation} names this process; reliable streams to and from it end when it is replaced. */
+    public record Hello(String token, String loader, String minecraft, boolean primary, String incarnation) {
+        public Hello(String token,String loader,String minecraft,boolean primary) { this(token,loader,minecraft,primary,UUID.randomUUID().toString()); }
+    }
+    public record Welcome(int slot, String primary, Set<String> runtimes, Map<String,String> incarnations) {}
+    /**
+     * The one logical player as its authority, the primary, sees it: everything an owner's own player must follow so
+     * native logic acts for the same player. A snapshot: newer versions replace older ones, an older one is ignored.
+     * {@code selected} is -1 and {@code held} null while the primary has no player (menus).
+     */
+    public record PlayerState(long version, int selected, String held, boolean grounded, String gameMode, String language) {}
     public record Pose(long cameraId, long epoch, String dimension, double x, double y, double z,
                        float yaw, float pitch, float fov, int width, int height,
                        double playerX, double playerY, double playerZ, float[] view, float[] projection) {
@@ -16,14 +25,56 @@ public final class Messages {
                 throw new IllegalArgumentException("invalid pose");
         }
     }
+    /**
+     * One block a runtime owns. {@code generation} numbers the object placed at this position: a block broken and placed
+     * again is a new object with a new id, so a reference to the old one (a ray hit, a pending interaction) is stale.
+     */
     public record ObjectState(String id, String owner, String dimension, int x, int y, int z,
-                              String type, long revision, Map<String,String> state) {
+                              String type, long revision, Map<String,String> state, long generation) {
+        public ObjectState(String id,String owner,String dimension,int x,int y,int z,String type,long revision,Map<String,String> state) {
+            this(id,owner,dimension,x,y,z,type,revision,state,0);
+        }
         public String location() { return dimension + ":" + x + ":" + y + ":" + z; }
     }
-    public static String objectId(String owner, String dimension, int x, int y, int z) {
-        return UUID.nameUUIDFromBytes((owner + "|" + dimension + "|" + x + "|" + y + "|" + z)
+    public static String objectId(String owner, String dimension, int x, int y, int z) { return objectId(owner,dimension,x,y,z,0); }
+    public static String objectId(String owner, String dimension, int x, int y, int z, long generation) {
+        return UUID.nameUUIDFromBytes((owner + "|" + dimension + "|" + x + "|" + y + "|" + z + (generation==0 ? "" : "|" + generation))
             .getBytes(java.nio.charset.StandardCharsets.UTF_8)).toString();
     }
+    /**
+     * The redstone signal one position of the sender's world gives each neighbour, indexed by {@code Direction.ordinal()}
+     * as Minecraft's {@code getSignal(pos, direction)} takes it: the direction from the neighbour asking to this position.
+     * {@code weak} includes power conducted through the block, {@code strong} is the direct signal; {@code analog} is
+     * what a comparator reads from the block (-1 when it has no analog output). All zero: no signal.
+     */
+    public record SignalState(String dimension, int x, int y, int z, int[] weak, int[] strong, int analog) {
+        public SignalState(String dimension,int x,int y,int z,int[] weak,int[] strong) { this(dimension,x,y,z,weak,strong,-1); }
+        public SignalState {
+            if (dimension == null || weak == null || strong == null || weak.length != 6 || strong.length != 6) throw new IllegalArgumentException("invalid signal");
+            for (int i = 0; i < 6; i++) if (weak[i] < 0 || weak[i] > 15 || strong[i] < 0 || strong[i] > 15) throw new IllegalArgumentException("signal out of range");
+            if (analog < -1 || analog > 15) throw new IllegalArgumentException("analog signal out of range");
+        }
+        public String location() { return dimension + ":" + x + ":" + y + ":" + z; }
+        public boolean silent() { if (analog > 0) return false; for (int i = 0; i < 6; i++) if (weak[i] != 0 || strong[i] != 0) return false; return true; }
+    }
+    /**
+     * A vanilla block of the sender's world next to another runtime's object, as {@code BlockStateParser} writes it
+     * (e.g. {@code minecraft:lever[face=floor,facing=north,powered=true]}); {@code minecraft:air} where the sender has
+     * nothing the receiver could build. The receiver's mods read it as their neighbour. A null state withdraws it.
+     */
+    public record NeighborState(String dimension, int x, int y, int z, String state) {
+        public String location() { return dimension + ":" + x + ":" + y + ":" + z; }
+    }
+    public record Neighbors(List<NeighborState> changes) {}
+    /**
+     * Items moving between a runtime's automation and another runtime's container, always through its owner:
+     * {@code offer} (items held by the sender, for the owner to insert), {@code accepted} (how many it inserted; the rest
+     * stays with the sender), {@code pull} (up to {@code count} items wanted out of the owner's container) and
+     * {@code pulled} (the items the owner took out, now the receiver's). Each kind is answered once by {@code id}.
+     */
+    public record Transfer(String kind, String id, String dimension, int x, int y, int z, String face, SlotItem item, int count) {}
+    /** The signals a runtime's boundary changed in one tick, in the order they changed. */
+    public record Signals(List<SignalState> changes) {}
     public record Event(String topic, Map<String,String> values) {}
     public record RayRequest(String actionId, Pose pose, double reach, String action, String heldItem, boolean secondaryUse, String hand, int selectedSlot) {
         public RayRequest(String id,Pose pose,double reach) { this(id,pose,reach,"use","minecraft:air",false); }

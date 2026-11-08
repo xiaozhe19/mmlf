@@ -42,7 +42,8 @@ tasks.register('stageHostMods', JavaExec) {
     onlyIf { !System.getenv('MMLF_SESSION') }
     classpath = project(':launcher').sourceSets.main.runtimeClasspath
     mainClass = 'dev.mmlf.launcher.SessionHost'
-    args rootProject.file('mmlf/mods').absolutePath, 'fabric', file('run/mods').absolutePath
+    // MMLF_MODS_DIR: another set of third-party mods (compatibility profiles, scripts/compat).
+    args (System.getenv('MMLF_MODS_DIR') ?: rootProject.file('mmlf/mods').absolutePath), 'fabric', file('run/mods').absolutePath
 }
 tasks.named('runClient') { dependsOn ':fabric-test-mod:classes', 'stageHostMods' }
 // Only the jar carries the session manager: development runs host sessions through Gradle instead.
@@ -50,3 +51,7 @@ tasks.named('jar') { from(project(':launcher').tasks.named('managerJar')) { into
 
 
 
+// Describes runClient for a session host that starts this runtime inside its own JVM.
+apply from: rootProject.file('gradle/client-run-spec.gradle')
+// In-JVM sessions start the other loader from its prepared dev launch.
+tasks.named('runClient') { dependsOn ':neoforge-bridge:writeClientRunSpec' }

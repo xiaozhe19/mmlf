@@ -79,7 +79,7 @@ public final class GuiHost {
     private static void report(String state,String reason) {
         Minecraft mc=Minecraft.getInstance(); var window=mc.getWindow();
         String screen=hosted==null?null:hosted.getClass().getName();
-        BridgeCore.send("gui",BridgeCore.primaryId(),new GuiState(instance,action,BridgeCore.runtimeId(),state,screen,hosted instanceof AbstractContainerScreen<?>,
+        BridgeCore.sendReliable("gui",BridgeCore.primaryId(),new GuiState(instance,action,BridgeCore.runtimeId(),state,screen,hosted instanceof AbstractContainerScreen<?>,
             (int)window.getGuiScale(),mc.getMainRenderTarget().width,mc.getMainRenderTarget().height,++reportSequence,reason));
     }
 
@@ -89,7 +89,7 @@ public final class GuiHost {
         releaseHeld();
         instance=null; hosted=null; action=null; activeSent=false; exporter.reset();
         MmlfLog.info("gui","hosted_closed",Map.of("instanceId",ended,"reason",reason));
-        InventoryBridge.returnLease(()->BridgeCore.send("gui",BridgeCore.primaryId(),new GuiState(ended,endedAction,BridgeCore.runtimeId(),"CLOSED",null,false,0,0,0,sequence+1,reason)));
+        InventoryBridge.returnLease(()->BridgeCore.sendReliable("gui",BridgeCore.primaryId(),new GuiState(ended,endedAction,BridgeCore.runtimeId(),"CLOSED",null,false,0,0,0,sequence+1,reason)));
     }
 
     /** The primary went away: the screen it was showing closes here too. */
@@ -144,7 +144,7 @@ public final class GuiHost {
             final String id=instance; final long input=appliedInput; final int scale=(int)mc.getWindow().getGuiScale();
             final long captured=System.nanoTime();
             exporter.capture(target,frameId->Wire.JSON.toJson(new GuiFrame(BridgeCore.runtimeId(),BridgeCore.session().identity(),id,frameId,target.width,target.height,scale,captured,input)).getBytes(java.nio.charset.StandardCharsets.UTF_8));
-            if(file==null) file=FrameFile.writer(BridgeCore.session().framePath(BridgeCore.runtimeId()+"-gui"));
+            if(file==null) file=Frames.writer(BridgeCore.runtimeId()+"-gui");
             long published=exporter.drain(file);
             if(published>0 && !activeSent && instance!=null) { activeSent=true; report("ACTIVE",null); }
         } catch(Exception e) {

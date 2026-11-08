@@ -13,8 +13,8 @@ public abstract class RenderSystemMixin {
   */
  @Inject(method="limitDisplayFPS",at=@At("HEAD"),cancellable=true,remap=false)
  private static void mmlf$wait(int fps,CallbackInfo ci) {
-  if(System.getProperty("mmlf.session")==null) return;
-  int target=BridgeCore.connected() && !BridgeCore.isPrimary() ? BridgeCore.BACKGROUND_FPS : fps;
+  if(dev.mmlf.bridge.RuntimeContext.current().sessionPath()==null && !BridgeCore.connected()) return;
+  int target=BridgeCore.connected() && !BridgeCore.isPrimary() ? BridgeCore.backgroundFps() : fps;
   long now=System.nanoTime(),wait=1_000_000_000L/Math.max(1,target)-(now-mmlf$last);
   if(wait>0) java.util.concurrent.locks.LockSupport.parkNanos(wait);
   mmlf$last=System.nanoTime(); ci.cancel();

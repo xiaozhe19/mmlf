@@ -6,7 +6,8 @@ import java.io.*;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.*;
 import java.util.*;
-import java.util.concurrent.TimeUnit;
+import dev.mmlf.launcher.runtime.*;
+import java.time.Duration;
 import java.util.zip.ZipFile;
 
 /**
@@ -27,28 +28,21 @@ public final class Manager {
         // stdout carries only the reply, in UTF-8 whatever the console's code page; log lines go to stderr until then.
         PrintStream reply=new PrintStream(new FileOutputStream(FileDescriptor.out),true,StandardCharsets.UTF_8);
         System.setOut(System.err);
-        SessionHost host=null;
+        RuntimeManager manager=null;
         try {
             Request request=Wire.JSON.fromJson(new BufferedReader(new InputStreamReader(System.in,StandardCharsets.UTF_8)).readLine(),Request.class);
             if(request==null || !PROFILE_LOADERS.containsKey(request.primary())) throw new IllegalStateException("无效的启动请求");
-            String remote=request.primary().equals("fabric")?"neoforge":"fabric";
+            String remote=ReleaseRemote.remoteOf(request.primary());
             Path root=Path.of(request.minecraftRoot());
-            progress(reply,0.1,"查找已安装的 "+NAMES.get(remote)+" 版本");
-            VersionProfile profile=remoteVersion(root,remote,request.minecraftVersion());
-            Path instance=Files.isDirectory(root.resolve("versions").resolve(profile.id()).resolve("mods"))?root.resolve("versions").resolve(profile.id()):root;
-            progress(reply,0.3,"检查 "+profile.id()+" 的模组");
-            List<Path> mods=remoteMods(instance.resolve("mods"),remote);
+            ReleaseRemote.Prepared prepared=ReleaseRemote.prepare(root,request.primary(),request.minecraftVersion(),Path.of(request.gameDirectory()),(f,t)->progress(reply,f,t));
 
             Path runtime=Path.of(request.gameDirectory()).resolve("mmlf").resolve("sessions");
             removeOldSessions(runtime);
-            host=SessionHost.create(runtime,null,request.primary(),false);
-            Runtime.getRuntime().addShutdownHook(new Thread(host::close,"mmlf-cleanup"));
-            // Kept across sessions: the background's worlds for the player's saves live here.
-            Path game=Path.of(request.gameDirectory()).resolve("mmlf").resolve(remote);
+            SessionHost host=SessionHost.create(runtime,null,request.primary(),false,SessionHost.Endpoint.WEBSOCKET);
+            manager=new RuntimeManager(host,new ProcessBackend(host));
+            Runtime.getRuntime().addShutdownHook(new Thread(manager::close,"mmlf-cleanup"));
             long started=System.currentTimeMillis();
-            progress(reply,0.5,"准备远端运行目录（"+mods.size()+" 个模组）");
-            stage(mods,instance,game);
-            host.suppressEarlyWindow(remote,game);
+            host.suppressEarlyWindow(remote,prepared.game());
             boolean windows=System.getProperty("os.name").toLowerCase(Locale.ROOT).contains("win");
             Path java=Path.of(System.getProperty("java.home"),"bin",windows?"javaw.exe":"java");
             List<String> extra=new ArrayList<>();
@@ -56,33 +50,33 @@ public final class Manager {
             extra.add("-Dmmlf.session="+host.sessionFile());
             extra.add("-Dmmlf.runtime="+remote);
             extra.add("-Dmmlf.logLevel="+MmlfLog.configuredLevel());
-            List<String> command=profile.command(java,game,game.resolve("natives"),request.account(),
-                Map.of("name",request.launcherName(),"version",request.launcherVersion()),extra);
-            MmlfLog.info("launcher","remote_version",Map.of("runtime",remote,"version",profile.id(),"loaderVersion",profile.loaderVersion(),"mods",mods.size(),"instance",instance.toString()));
-            progress(reply,0.9,"启动 "+profile.id());
-            Process child=host.launchInstalled(remote,command,game);
+            MmlfLog.info("launcher","remote_version",Map.of("runtime",remote,"version",prepared.profile().id(),"loaderVersion",prepared.profile().loaderVersion(),"mods",prepared.mods().size(),"instance",prepared.instance().toString()));
+            progress(reply,0.9,"启动 "+prepared.profile().id());
+            reportExit(manager,remote,prepared.game(),started);
+            manager.start(ReleaseRemote.process(prepared,host.directory(),java,request.account(),Map.of("name",request.launcherName(),"version",request.launcherVersion()),extra));
 
             reply.println("MMLF-SESSION "+host.sessionFile());
             reply.flush();
             // Nobody reads stdout after the reply; a full pipe would block every log line.
             PrintStream log=new PrintStream(new FileOutputStream(host.directory().resolve("manager.log").toFile(),true),true,StandardCharsets.UTF_8);
             System.setOut(log); System.setErr(log);
-            supervise(host,request.hostPid(),child,remote,game,started);
+            ProcessHandle primary=ProcessHandle.of(request.hostPid()).orElse(null);
+            manager.supervise(()->primary!=null && primary.isAlive(),Duration.ofMinutes(10),false);
         } catch(Throwable e) {
             String message=e.getMessage()==null?e.toString():e.getMessage();
             reply.println("MMLF-ERROR "+message.replace('\r',' ').replace('\n',' '));
             reply.flush();
-            if(host!=null) host.close();
+            if(manager!=null) manager.close();
             System.exit(1);
         }
         MmlfLog.info("launcher","session_cleanup",Map.of());
-        host.close();
+        manager.close();
         // Coordinator server threads are non-daemon; the JVM would otherwise outlive the session.
         System.exit(0);
     }
 
     /** A step before the reply, for the primary's progress panel; the reply line still ends the exchange. */
-    private static void progress(PrintStream reply,double fraction,String text) {
+    static void progress(PrintStream reply,double fraction,String text) {
         reply.println("MMLF-PROGRESS "+fraction+" "+text.replace('\r',' ').replace('\n',' '));
         reply.flush();
     }
@@ -147,7 +141,7 @@ public final class Manager {
     }
 
     /** Keeps the newest few sessions; a directory still in use by a running game simply fails to delete. */
-    static void removeOldSessions(Path runtime) {
+    public static void removeOldSessions(Path runtime) {
         if(!Files.isDirectory(runtime)) return;
         try(var directories=Files.list(runtime)) {
             List<Path> sessions=directories.filter(Files::isDirectory).filter(p->p.getFileName().toString().startsWith("session-"))
@@ -163,7 +157,7 @@ public final class Manager {
     /** Written to the session directory when the background runtime exits; the primary shows it as its error. */
     public static final String REMOTE_ERROR="remote-error.txt";
     /** The newest crash report's description and root cause, else the exit code; always names where to look. */
-    static String remoteFailure(String name,int exitCode,Path game,Path log,long since) {
+    public static String remoteFailure(String name,int exitCode,Path game,Path log,long since) {
         String reason="进程退出，退出码 "+exitCode;
         Path where=log;
         Path reports=game.resolve("crash-reports");
@@ -186,25 +180,25 @@ public final class Manager {
         return "远端 "+name+" 启动失败（"+reason+"）。详见 "+where;
     }
 
-    /** Ends the session when the primary's process exits or it leaves the Coordinator. */
-    private static void supervise(SessionHost host,long hostPid,Process child,String remote,Path game,long started) throws InterruptedException {
-        ProcessHandle primary=ProcessHandle.of(hostPid).orElse(null);
-        var coordinator=host.coordinator();
-        long startupDeadline=System.nanoTime()+TimeUnit.MINUTES.toNanos(10);
-        boolean childReported=false;
-        while(true) {
-            Thread.sleep(1000);
-            if(primary==null || !primary.isAlive()) { MmlfLog.info("launcher","primary_exited",Map.of("pid",hostPid)); return; }
-            if(coordinator.hadPrimary() && !coordinator.hasPrimary()) { MmlfLog.info("launcher","primary_disconnected",Map.of()); return; }
-            if(!coordinator.hadPrimary() && System.nanoTime()>startupDeadline) { MmlfLog.warn("launcher","primary_registration_timeout",Map.of()); return; }
-            if(!childReported && !child.isAlive()) {
-                childReported=true;
-                Path log=host.directory().resolve(remote+".log");
-                MmlfLog.error("launcher","remote_exited",Map.of("pid",child.pid(),"exitCode",child.exitValue(),"log",log.toString()));
-                // The primary waits for this runtime's world; it reads the reason instead of waiting forever.
-                try { Files.writeString(host.directory().resolve(REMOTE_ERROR),remoteFailure(NAMES.get(remote),child.exitValue(),game,log,started),StandardCharsets.UTF_8); }
-                catch(IOException e) { MmlfLog.error("launcher","remote_error_write_failed",Map.of("exception",e.toString())); }
-            }
-        }
+    /** The primary waits for the background's world; when the background ends first, it reads why instead of waiting forever. */
+    public static void reportExit(RuntimeManager manager,String remote,Path game,long started) {
+        Path directory=manager.session().directory();
+        manager.onExit((handle,exit)->{
+            if(!handle.id().equals(remote) || (manager.coordinator().hadPrimary() && !manager.coordinator().hasPrimary())) return;
+            Path log=directory.resolve(remote+".log");
+            String name=NAMES.getOrDefault(remote,remote);
+            String text=exit.failure()!=null?"远端 "+name+" 启动失败（"+exit.failure()+"）。详见 "+log:remoteFailure(name,exit.code(),game,log,started);
+            MmlfLog.error("launcher","remote_exited",Map.of("runtimeId",remote,"exitCode",exit.code(),"log",log.toString()));
+            writeRemoteError(directory,text);
+        });
+        manager.onStall((handle,reason)->{
+            if(!handle.id().equals(remote)) return;
+            String name=NAMES.getOrDefault(remote,remote);
+            writeRemoteError(directory,"远端 "+name+" 启动停滞（"+reason+"）。详见 "+directory.resolve(remote+".log"));
+        });
+    }
+    private static void writeRemoteError(Path directory,String text) {
+        try { Files.writeString(directory.resolve(REMOTE_ERROR),text,StandardCharsets.UTF_8); }
+        catch(IOException e) { MmlfLog.error("launcher","remote_error_write_failed",Map.of("exception",e.toString())); }
     }
 }

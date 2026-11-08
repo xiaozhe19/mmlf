@@ -23,6 +23,7 @@ final class GuiSelfTest {
     private static String failure;
     private GuiSelfTest() {}
 
+    static boolean finished() { return done; }
     static void tick(Minecraft mc,int t,int side) {
         if(done) return;
         int index=t/STEP, local=t%STEP;

@@ -28,23 +28,27 @@ public final class BridgeCore {
         long nextOpen;
         FrameFile.Pixels pixels, spare;
         final SampleWindow frameAgeMs=new SampleWindow(2048), angularErrorDegrees=new SampleWindow(2048);
-        long metricSince, feedbackSince;
+        /** Pose published → composited, on the primary's clock; how many poses newer than the frame's existed then. */
+        final SampleWindow endToEndMs=new SampleWindow(2048), posesBehind=new SampleWindow(2048);
+        long metricSince, feedbackSince, lastFrameId=-1;
+        int composited, repeated, stale, unknownPose;
         void close() { if(file!=null) try { file.close(); } catch(java.io.IOException ignored) {} }
     }
     private static final Map<String,RemoteLayer> remoteLayers=new java.util.LinkedHashMap<>();
+    /** Primary: when each recent pose was published, to measure each composited frame end to end. */
+    private static final dev.mmlf.common.PoseHistory poseHistory=new dev.mmlf.common.PoseHistory(1024);
+    /** Time between this runtime's world frames, for frame-time percentiles (fps alone hides stutter). */
+    private static final SampleWindow frameTimesMs=new SampleWindow(4096);
+    private static long lastWorldFrame, previousGcCount, previousGcMillis;
     private static Frame displayFrame;
     private static FrameFile.Pixels displayPixels;
     private static Pose primaryPose;
     private static final java.util.Set<String> peers = new java.util.HashSet<>();
-    private static final java.util.Map<net.minecraft.core.BlockPos,ObjectState> localObjects = new java.util.HashMap<>();
-    private static int scanTick;
     private static long metricAt, metricFrames, previousCpu;
     private static boolean compositeReported;
     private static final java.util.Set<net.minecraft.core.BlockPos> ownedVanilla=java.util.concurrent.ConcurrentHashMap.newKeySet();
     private static long lastAttack;
-    private static String lastHeld="";
-    private static long heldSent,lastResize,lastLinked,languageSent;
-    private static String lastLanguage="";
+    private static long lastResize,lastLinked;
     private static boolean everLinked, worldReadySent, backgroundMusicStopped;
     public static boolean suppressBackgroundMusic(net.minecraft.sounds.SoundSource source) {
         return link!=null && !primary && source==net.minecraft.sounds.SoundSource.MUSIC;
@@ -56,6 +60,8 @@ public final class BridgeCore {
     public static String primaryId() {return session==null?null:session.primary();}
     /** Sends a control message when linked; dropped otherwise, like every other bridge message. */
     public static void send(String type,String target,Object body) { if(link!=null) link.send(type,target,body); }
+    /** Sends a message that must arrive exactly once (a resource change, a lifecycle report); kept across reconnects. */
+    public static void sendReliable(String type,String target,Object body) { if(link!=null) link.sendReliable(type,target,body); }
     public static FrameTiming.Clock calibration() { return link==null?null:link.calibration(); }
 
     private record RemoteShape(String owner,String dimension,java.util.List<net.minecraft.world.phys.shapes.VoxelShape> shapes) {}
@@ -85,18 +91,23 @@ public final class BridgeCore {
         collisions.put(object.id(),new RemoteShape(object.owner(),object.dimension(),java.util.List.copyOf(shapes)));
     }
     /** A vanilla block this runtime placed for its own scene belongs to it, like one it placed through interaction. */
-    public static void ownVanilla(net.minecraft.core.BlockPos pos) { ownedVanilla.add(pos.immutable()); }
+    /** The primary owns every vanilla block anyway; a background owns those it placed itself (its scene, native uses). */
+    public static void ownVanilla(net.minecraft.server.level.ServerLevel level,net.minecraft.core.BlockPos pos) { if(primary) return; ownedVanilla.add(pos.immutable()); Boundary.claim(level,pos); }
+    static boolean ownsVanilla(net.minecraft.core.BlockPos pos) { return ownedVanilla.contains(pos); }
+    static java.util.Set<net.minecraft.core.BlockPos> ownedVanilla() { return ownedVanilla; }
     public static boolean renderOwned(net.minecraft.world.level.block.state.BlockState state,net.minecraft.core.BlockPos pos) {
         return primary || !connected() || !net.minecraft.core.registries.BuiltInRegistries.BLOCK.getKey(state.getBlock()).getNamespace().equals("minecraft") || ownedVanilla.contains(pos);
     }
     private static java.nio.ByteBuffer colorBuffer, depthBuffer;
     private BridgeCore() {}
     public static void initialize(String loader) {
-        String sessionPath=System.getProperty("mmlf.session", System.getenv("MMLF_SESSION"));
-        String id=System.getProperty("mmlf.runtime",loader);
-        if (sessionPath==null || sessionPath.isBlank()) {
-            Path hosted=SessionBootstrap.hostIfRequested(id);
-            if(hosted==null && SessionBootstrap.release()) { releaseRuntime=id; System.out.println("MMLF: release build; session starts with the game"); return; }
+        RuntimeContext context=RuntimeContext.current();
+        if(!context.loader().equals(loader)) throw new IllegalStateException("MMLF bridge for "+loader+" runs in "+context.loader());
+        String sessionPath=context.sessionPath();
+        String id=context.id();
+        if (sessionPath==null) {
+            Path hosted=context.mayHost()?SessionBootstrap.hostIfRequested(id):null;
+            if(hosted==null && context.mayHost() && SessionBootstrap.release()) { releaseRuntime=id; System.out.println("MMLF: release build; session starts with the game"); return; }
             if(hosted==null) { System.out.println("MMLF: no session configured; bridge inactive"); return; }
             sessionPath=hosted.toString();
         }
@@ -126,13 +137,22 @@ public final class BridgeCore {
             sessionIdentity=session.identity();
             primary=id.equals(session.primary());
             link=new RuntimeClient(session,id,loader,primary,BridgeCore::receive);
-            BridgeEvents.install((target,event)->link.send("event",target,event));
+            BridgeEvents.install((target,event)->link.sendReliable("event",target,event));
             RemoteItems.initialize(link,primary);
             InventoryBridge.initialize(link.id,primary);
             link.start();
             if(primary) SessionStatus.launched(remoteOf(id),session.root().resolve(remoteOf(id)+".log"));
-            Runtime.getRuntime().addShutdownHook(new Thread(()->{ link.close(); try { if(poseFile!=null) poseFile.close(); } catch(java.io.IOException ignored) {} },"mmlf-shutdown"));
+            RuntimeContext context=RuntimeContext.current();
+            RuntimeClient joined=link;
+            Runnable release=()->{ joined.close(); try { if(poseFile!=null) poseFile.close(); } catch(java.io.IOException ignored) {} };
+            // In-JVM, this runtime ends long before the JVM: its backend runs the clean-up once its game has returned.
+            if(context.inJvm()) dev.mmlf.common.InJvm.registry().put(dev.mmlf.launcher.runtime.InJvmBackend.cleanupKey(context.loader()),release);
+            else Runtime.getRuntime().addShutdownHook(new Thread(release,"mmlf-shutdown"));
             System.out.println("MMLF bridge initialized: "+id);
+            if(context.inJvm()) {
+                dev.mmlf.common.InJvm.registry().put(dev.mmlf.launcher.runtime.InJvmBackend.initializedKey(context.loader()),Boolean.TRUE);
+                phase(dev.mmlf.launcher.runtime.InJvmBackend.PHASE_BRIDGE);
+            }
         } catch(Exception e) {
             System.err.println("MMLF session initialization failed: "+e);
             SessionStatus.fail("MMLF 会话初始化失败："+e,Path.of(sessionPath).getParent());
@@ -140,16 +160,17 @@ public final class BridgeCore {
     }
     private static void receive(Wire message) {
         Minecraft mc=Minecraft.getInstance();
-        if(message.type().equals("object")) {updateCollision(message.body(ObjectState.class));
+        if(message.type().equals("object")) {ObjectState object=message.body(ObjectState.class); if(link!=null && !object.owner().equals(link.id)) Boundary.remoteChanged(object); updateCollision(object);
         } else if(message.type().equals("welcome")) {
-            Welcome welcome=message.body(Welcome.class); mc.execute(()->{peers.clear(); peers.addAll(welcome.runtimes()); localObjects.clear();});
+            Welcome welcome=message.body(Welcome.class); mc.execute(()->{peers.clear(); peers.addAll(welcome.runtimes()); var server=mc.getSingleplayerServer(); if(server!=null) server.execute(Boundary::republish);});
+            RedstoneBridge.runtimeJoined();
         } else if(message.type().equals("runtime_joined")) {
-            String id=message.data().get("runtime").getAsString(); mc.execute(()->peers.add(id));
+            String id=message.data().get("runtime").getAsString(); mc.execute(()->peers.add(id)); RedstoneBridge.runtimeJoined();
         } else if(message.type().equals("runtime_left")) {
-            String id=message.data().get("runtime").getAsString(); readyRuntimes.remove(id); mc.execute(()->{peers.remove(id); GuiClient.runtimeLeft(id); RemoteCatalog.forget(id); if(id.equals(session.primary())) GuiHost.primaryLost("primary_left"); RemoteLayer removed=remoteLayers.remove(id); if(removed!=null) removed.close(); collisions.values().removeIf(v->v.owner().equals(id)); if(id.equals(session.primary())) { lastRemotePose=null; poseSequence=0; poseSourceNanos=0; yawRate=pitchRate=0; predictionLead.reset(); adaptiveOverscan.reset(); }});
+            String id=message.data().get("runtime").getAsString(); readyRuntimes.remove(id); if(id.equals(session.primary())) playerVersion=0; Boundary.forgetRemote(id); RedstoneBridge.runtimeLeft(id); mc.execute(()->{peers.remove(id); GuiClient.runtimeLeft(id); RemoteCatalog.forget(id); if(id.equals(session.primary())) GuiHost.primaryLost("primary_left"); RemoteLayer removed=remoteLayers.remove(id); if(removed!=null) removed.close(); collisions.values().removeIf(v->v.owner().equals(id)); if(id.equals(session.primary())) { lastRemotePose=null; poseSequence=0; poseSourceNanos=0; yawRate=pitchRate=0; predictionLead.reset(); adaptiveOverscan.reset(); }});
         } else if(message.type().equals("disconnected")) {
-            worldReadySent=false; readyRuntimes.clear();
-            mc.execute(()->{GuiClient.disconnected(); GuiHost.primaryLost("disconnected");peers.clear(); collisions.clear(); localObjects.clear(); remoteLayers.values().forEach(RemoteLayer::close); remoteLayers.clear(); displayFrame=null; displayPixels=null; lastRemotePose=null; poseSequence=0; poseSourceNanos=0; yawRate=pitchRate=0; predictionLead.reset(); adaptiveOverscan.reset();});
+            worldReadySent=false; readyRuntimes.clear(); playerVersion=0; Boundary.forgetAllRemote(); RedstoneBridge.disconnected();
+            mc.execute(()->{GuiClient.disconnected(); GuiHost.primaryLost("disconnected");peers.clear(); collisions.clear(); remoteLayers.values().forEach(RemoteLayer::close); remoteLayers.clear(); displayFrame=null; displayPixels=null; lastRemotePose=null; poseSequence=0; poseSourceNanos=0; yawRate=pitchRate=0; predictionLead.reset(); adaptiveOverscan.reset();});
         } else if(message.type().equals("ray_request")) {
             RayRequest request=message.body(RayRequest.class); mc.execute(()->raycast(request));
         } else if(message.type().equals("interaction")) {
@@ -160,8 +181,16 @@ public final class BridgeCore {
             if(primary) GuiClient.receive(message);
         } else if(message.type().equals("gui_input")) {
             if(!primary && message.source().equals(session.primary())) GuiHost.receive(message.body(GuiInput.class));
+        } else if(message.type().equals("neighbors")) {
+            NeighborMirror.receive(message.source(),message.body(Neighbors.class));
+        } else if(message.type().equals("transfer")) {
+            ContainerBridge.receive(message.source(),message.body(Transfer.class));
+        } else if(message.type().equals("signals")) {
+            RedstoneBridge.receive(message.source(),message.body(Signals.class));
         } else if(message.type().equals("inventory")) {
             InventoryBridge.receive(message);
+        } else if(message.type().equals("player")) {
+            if(!primary && message.source().equals(session.primary())) followPlayer(mc,message.body(PlayerState.class));
         } else if(message.type().equals("event")) {
             Event event=message.body(Event.class);
             if(event.topic().equals("mmlf:latency_feedback")) {
@@ -172,18 +201,20 @@ public final class BridgeCore {
                 }
                 return;
             }
+            if(event.topic().equals("mmlf:tick")) { if(!primary && message.source().equals(session.primary())) try { TickSync.permit(Long.parseLong(event.values().get("tick"))); } catch(RuntimeException ignored) { } return; }
+            if(event.topic().startsWith("mmlf:experiment")) { ExperimentProbe.receive(mc,message.source(),event); return; }
+            if(event.topic().equals("mmlf:interest") || event.topic().equals("mmlf:chunks")) { ChunkFollow.receive(message.source(),event); return; }
             if(event.topic().equals("mmlf:session_end")) { if(!primary) mc.execute(()->stopBackground(mc,"session_end")); return; }
             if(event.topic().equals("mmlf:world") || event.topic().equals("mmlf:world_closed")) {
                 if(!primary && message.source().equals(session.primary()) && WorldFollow.enabled(session)) WorldFollow.receive(mc,event.topic(),event.values());
                 return;
             }
             if(event.topic().equals("mmlf:world_ready")) { readyRuntimes.add(message.source()); MmlfLog.info("connection","runtime_world_ready",Map.of("runtime",message.source())); return; }
-            if(event.topic().equals("mmlf:held")) {if(!primary) { primaryGrounded=!"false".equals(event.values().get("grounded")); mc.execute(()->RemoteItems.updateHeld(event.values().get("item"),event.values().get("slot"))); } return;}
             if(event.topic().equals("mmlf:picked")) {RemoteItems.receive(message);return;}
             if(event.topic().equals("mmlf:catalog_request")) {if(!primary && message.source().equals(session.primary())) mc.execute(()->RemoteCatalog.answer(message.source()));return;}
             if(event.topic().equals("mmlf:catalog")) {if(primary) RemoteCatalog.receive(message.source(),event.values().get("catalog"));return;}
-            if(event.topic().equals("mmlf:language")) {if(!primary && message.source().equals(session.primary())) mc.execute(()->{followGameMode(mc,event.values().get("gameMode"));followLanguage(mc,event.values().get("code"),message.source());});return;}
             if(event.topic().equals("mmlf:attack_stop")) {if(!primary && message.source().equals(session.primary())) mc.execute(()->stopMining(mc));return;}
+            if(event.topic().startsWith("mmlf:selftest")) { CollabSelfTest.receive(mc,message.source(),event); return; }
             if(event.topic().equals("mmlf:icon_request")) {if(!primary && message.source().equals(session.primary())) VisualLayers.requestIcons(event.values().get("references"));return;}
             mc.execute(()-> {
                 if (mc.getSingleplayerServer()!=null) mc.getSingleplayerServer().execute(()->BridgeEvents.deliver(event));
@@ -191,8 +222,23 @@ public final class BridgeCore {
             });
         }
     }
+    /** In-JVM: tells the backend how far this runtime got (see {@link dev.mmlf.launcher.runtime.InJvmBackend#phaseKey}). */
+    private static void phase(String phase) {
+        RuntimeContext context=RuntimeContext.current();
+        if(!context.inJvm()) return;
+        var registry=dev.mmlf.common.InJvm.registry();
+        String key=dev.mmlf.launcher.runtime.InJvmBackend.phaseKey(context.loader());
+        // A stopping runtime stays stopping; a phase reported again changes nothing.
+        if(dev.mmlf.launcher.runtime.InJvmBackend.PHASE_STOPPING.equals(registry.get(key))) return;
+        registry.put(key,phase);
+    }
+    private static boolean gamePhaseSent;
     public static void tick(Minecraft mc) {
+        if(!gamePhaseSent) { gamePhaseSent=true; phase(dev.mmlf.launcher.runtime.InJvmBackend.PHASE_GAME); }
+        // The host may ask for a stop before this runtime has joined its session (still loading, stalled on a screen).
+        if(++stopCheckTick%20==0 && RuntimeContext.current().inJvm() && dev.mmlf.common.InJvm.registry().get(dev.mmlf.launcher.runtime.InJvmBackend.stopKey(RuntimeContext.current().loader()))!=null) { stopBackground(mc,"host_stop"); return; }
         if(releaseRuntime!=null) joinRelease(mc);
+        if(Experiments.GEOMETRY) dev.mmlf.bridge.render.GeometryLayer.tick(mc);
         if(link!=null && primary && !SessionStatus.failed() && ++remoteErrorTick%20==0) {
             Path error=session.root().resolve("remote-error.txt");
             if(java.nio.file.Files.isRegularFile(error)) {
@@ -222,10 +268,10 @@ public final class BridgeCore {
             try { poseFile=primary ? PoseFile.publisher(session.posePath(),session.token()) : PoseFile.reader(session.posePath(),session.token()); }
             catch(java.io.IOException e) { MmlfLog.sampled("camera","pose_file_unavailable",5000,Map.of("primary",primary,"reason",e.toString())); }
         }
-        if(link!=null && link.ready() && primary) sendLanguage(mc);
+        if(link!=null && link.ready() && primary) sendPlayer(mc);
         if(link!=null && !primary && pendingLanguage!=null) followLanguage(mc,pendingLanguage,session.primary());
         if(link==null || !link.ready() || mc.player==null || mc.level==null) return;
-        if(!worldReadySent) { worldReadySent=true; link.send("event","*",new Event("mmlf:world_ready",Map.of())); }
+        if(!worldReadySent) { worldReadySent=true; link.sendReliable("event","*",new Event("mmlf:world_ready",Map.of())); phase(dev.mmlf.launcher.runtime.InJvmBackend.PHASE_WORLD); }
         // The primary decides when the game pauses; a background that paused on lost focus would stop its server.
         if(!primary && mc.options.pauseOnLostFocus) mc.options.pauseOnLostFocus=false;
         if(primary) { GuiClient.tick(mc); VisualLayers.flushIconRequests(); RemoteCatalog.tick(mc,peers); } else GuiHost.tick(mc);
@@ -252,30 +298,49 @@ public final class BridgeCore {
                 });
             }
         }
-        if (++scanTick % 2 == 0) publishNearby(mc);
+        // The boundary is published at the end of each server tick (TickSync.endOfTick), not from here.
         metrics();
-        if(primary) {
-            int slot=mc.player.getInventory().selected;
-            String item=RemoteItems.held(mc.player.getMainHandItem()), held=item+"#"+slot+"#"+mc.player.onGround();long now=System.nanoTime();
-            if(!held.equals(lastHeld) || now-heldSent>1_000_000_000L) {
-                lastHeld=held;heldSent=now;
-                link.send("event","*",new Event("mmlf:held",Map.of("item",item,"slot",Integer.toString(slot),"grounded",Boolean.toString(mc.player.onGround()))));
-                MmlfLog.debug("render.items","held_sync",Map.of("remote",RemoteItemRef.parse(item).isPresent(),"slot",slot));
-            }
-        }
     }
     /**
-     * Owners run native logic for the same player: its language and game mode follow the primary's, so names, screens and
-     * whether a use consumes the item match what the player sees here. Sent from the menus too, so a background has
-     * switched language before it opens a world rather than reloading its resources in the middle of loading one.
+     * Primary: the one logical player as owners must follow it. Owners run native logic for the same player, so its
+     * hotbar slot, held item, footing, game mode and language follow the primary's: what a use consumes, how fast a
+     * block breaks and what screens say match what the player sees here. Sent from the menus too, so a background has
+     * switched language before it opens a world rather than reloading its resources in the middle of loading one. A
+     * snapshot, sent on every change and once a second: a lost one is replaced by the next.
      */
-    private static void sendLanguage(Minecraft mc) {
+    private static void sendPlayer(Minecraft mc) {
         long now=System.nanoTime();
-        String language=mc.options.languageCode, mode=mc.gameMode==null?"survival":mc.gameMode.getPlayerMode().getName();
-        if(!(language+"|"+mode).equals(lastLanguage) || now-languageSent>5_000_000_000L) {
-            lastLanguage=language+"|"+mode;languageSent=now;
-            link.send("event","*",new Event("mmlf:language",Map.of("code",language,"gameMode",mode)));
+        var player=mc.player;
+        int selected=player==null?-1:player.getInventory().selected;
+        String held=player==null?null:RemoteItems.held(player.getMainHandItem());
+        boolean grounded=player==null || player.onGround();
+        String mode=mc.gameMode==null?"survival":mc.gameMode.getPlayerMode().getName();
+        String key=selected+"|"+held+"|"+grounded+"|"+mode+"|"+mc.options.languageCode;
+        if(key.equals(lastPlayer) && now-playerSent<1_000_000_000L) return;
+        if(!key.equals(lastPlayer)) MmlfLog.debug("player","state_sync",Map.of("selected",selected,"remoteHeld",held!=null && RemoteItemRef.parse(held).isPresent(),"gameMode",mode));
+        lastPlayer=key; playerSent=now;
+        link.send("player","*",new PlayerState(++playerVersion,selected,held,grounded,mode,mc.options.languageCode));
+    }
+    private static String lastPlayer="";
+    private static long playerSent;
+    /** Primary: the version of the last state it sent. Owner: of the last state it applied, 0 until the primary's first. */
+    private static volatile long playerVersion;
+    /** Owner, network thread: applies a newer player state; an older one, overtaken on the way, is ignored. */
+    private static void followPlayer(Minecraft mc,PlayerState state) {
+        synchronized(BridgeCore.class) {
+            if(state.version()<=playerVersion) { MmlfLog.sampled("player","stale_state",1000,Map.of("version",state.version(),"applied",playerVersion)); return; }
+            playerVersion=state.version();
         }
+        primaryGrounded=state.grounded();
+        mc.execute(()->{
+            if(state.held()!=null) RemoteItems.updateHeld(state.held(),state.selected());
+            followGameMode(mc,state.gameMode());
+            followLanguage(mc,state.language(),session.primary());
+        });
+        var server=mc.getSingleplayerServer();
+        if(server!=null && state.selected()>=0 && state.selected()<9) server.execute(()->{
+            if(!server.getPlayerList().getPlayers().isEmpty()) server.getPlayerList().getPlayers().getFirst().getInventory().selected=state.selected();
+        });
     }
     public static void publishCamera(Camera camera, float worldFov) {
         Minecraft mc=Minecraft.getInstance();
@@ -300,7 +365,9 @@ public final class BridgeCore {
                 primaryPose=pose;
                 MmlfLog.sampled("camera","requested",1000,Map.of("cameraId",pose.cameraId(),"x",pose.x(),"y",pose.y(),"z",pose.z(),"yaw",pose.yaw(),"pitch",pose.pitch(),"fov",pose.fov(),"dimension",pose.dimension()));
                 if(poseFile!=null) try {
-                    if(!poseFile.publish(sequence,System.nanoTime(),pose)) MmlfLog.sampled("camera","pose_publish_busy",1000,Map.of());
+                    long publishedAt=System.nanoTime();
+                    if(!poseFile.publish(sequence,publishedAt,pose)) MmlfLog.sampled("camera","pose_publish_busy",1000,Map.of());
+                    else poseHistory.published(sequence,publishedAt);
                 } catch(java.io.IOException | IllegalArgumentException e) { MmlfLog.sampled("camera","pose_publish_failed",1000,Map.of("reason",e.toString())); }
             }
     }
@@ -340,40 +407,30 @@ public final class BridgeCore {
             RemoteCatalog.answer(primaryId);
         }));
     }
-    private static Boolean hiddenBackground;
-    /**
-     * Whether this process is a background runtime whose window should stay hidden. Read straight from the session file,
-     * because the window is created before the bridge initializes.
-     */
-    public static boolean hiddenBackground() {
-        if(hiddenBackground==null) {
-            boolean hidden=false;
-            try {
-                String path=System.getProperty("mmlf.session",System.getenv("MMLF_SESSION"));
-                if(path!=null && "true".equals(System.getenv("MMLF_HIDE_SECONDARY")))
-                    hidden=!Session.read(Path.of(path)).primary().equals(System.getProperty("mmlf.runtime"));
-            } catch(Exception ignored) { }
-            hiddenBackground=hidden;
-        }
-        return hiddenBackground;
-    }
-    /** The process that started this background runtime (session host or launcher), when it told us. */
-    private static final ProcessHandle HOST=hostProcess();
-    private static int hostCheckTick;
+    /** Whether this runtime is a background whose window stays hidden; known before the window is created. */
+    public static boolean hiddenBackground() { return RuntimeContext.current().hiddenWindow(); }
+    /** The process that started this background runtime, when the process backend told us; in-JVM runtimes share it. */
+    private static final ProcessHandle HOST=RuntimeContext.current().host();
+    private static int hostCheckTick, stopCheckTick;
     private static boolean stopping;
-    private static ProcessHandle hostProcess() {
-        try { String pid=System.getenv("MMLF_HOST_PID"); return pid==null?null:ProcessHandle.of(Long.parseLong(pid)).orElse(null); }
-        catch(RuntimeException e) { return null; }
-    }
     private static void stopBackground(Minecraft mc,String reason) {
         if(stopping) return; stopping=true;
+        phase(dev.mmlf.launcher.runtime.InJvmBackend.PHASE_STOPPING);
         MmlfLog.warn("connection","background_stopping",Map.of("reason",reason));
         mc.stop();
     }
+    /**
+     * The game is about to release its window and GL resources. A primary hosting in-JVM runtimes stops them first and
+     * waits (bounded) for them: they must not be inside their own GL driver calls while this JVM ends.
+     */
+    public static void destroying() { SessionBootstrap.stopRuntimes(); }
     /** Primary, as its window closes: background runtimes stop now instead of waiting to notice the lost link. */
     public static void closing() {
+        phase(dev.mmlf.launcher.runtime.InJvmBackend.PHASE_STOPPING);
         // Minecraft.stop() runs again on every frame of the closing screen; announce the end once.
-        if(primary && !stopping && link!=null && link.ready()) { stopping=true; link.send("event","*",new Event("mmlf:session_end",Map.of())); MmlfLog.info("connection","session_end_sent",Map.of()); }
+        var server=Minecraft.getInstance().getSingleplayerServer();
+        if(server!=null && !stopping) ContainerBridge.spillAll(server);
+        if(primary && !stopping && link!=null && link.ready()) { stopping=true; link.sendReliable("event","*",new Event("mmlf:session_end",Map.of())); MmlfLog.info("connection","session_end_sent",Map.of()); }
     }
     /** A background's frame rate; the GTA V passthrough runs its guest uncapped by vsync at 120 for the same reason. */
     public static final int BACKGROUND_FPS=Integer.getInteger("mmlf.backgroundFps",120);
@@ -393,7 +450,23 @@ public final class BridgeCore {
             yawRate=nextYaw*yawRate<0 ? nextYaw : yawRate+0.5*(nextYaw-yawRate);
             pitchRate=nextPitch*pitchRate<0 ? nextPitch : pitchRate+0.5*(nextPitch-pitchRate);
         } else { yawRate=0; pitchRate=0; }
+        if(lastRemotePose==null || lastRemotePose.cameraId()!=pose.cameraId()) lastCameraChange=now;
         poseArrived=now; poseSourceNanos=sourceNanos; lastRemotePose=pose;
+    }
+    /** on_demand experiment: when the primary's camera last moved, and when this runtime's objects last changed. */
+    private static volatile long lastCameraChange, lastLocalChange;
+    static void localObjectChanged() { lastLocalChange=System.nanoTime(); }
+    /** Frame rate while nothing a background renders changes: frames stay well inside the primary's one-second staleness. */
+    private static final int IDLE_FPS=Integer.getInteger("mmlf.idleFps",10);
+    private static final long IDLE_AFTER_NANOS=250_000_000L;
+    private static long idleFrames, busyFrames;
+    /** A background's frame-rate cap: {@link #BACKGROUND_FPS}, or {@link #IDLE_FPS} while idle under on_demand. */
+    public static int backgroundFps() {
+        if(!Experiments.ON_DEMAND || GuiHost.hosting() || miningPos!=null) { busyFrames++; return BACKGROUND_FPS; }
+        long now=System.nanoTime();
+        boolean idle=now-lastCameraChange>IDLE_AFTER_NANOS && now-lastLocalChange>IDLE_AFTER_NANOS;
+        if(idle) idleFrames++; else busyFrames++;
+        return idle ? IDLE_FPS : BACKGROUND_FPS;
     }
     public static void beginCameraRender() {
         pollSharedPose();
@@ -466,56 +539,17 @@ public final class BridgeCore {
     /** Remote runtimes render at the primary framebuffer size so colour, depth and hand pixels share one projection. */
     private static void matchPrimaryWindow(Minecraft mc,Pose p) {
         var target=mc.getMainRenderTarget();
-        if(target.width==p.width() && target.height==p.height()) return;
+        // render_scale experiment: the same view at a fraction of the primary's pixels; the compositor samples it by UV.
+        int wantWidth=Math.max(1,(int)Math.round(p.width()*Experiments.SCALE)),wantHeight=Math.max(1,(int)Math.round(p.height()*Experiments.SCALE));
+        if(target.width==wantWidth && target.height==wantHeight) return;
         long now=System.nanoTime(); if(now-lastResize<500_000_000L) return; lastResize=now;
         long window=mc.getWindow().getWindow();
         int[] ww=new int[1],wh=new int[1],fw=new int[1],fh=new int[1];
         org.lwjgl.glfw.GLFW.glfwGetWindowSize(window,ww,wh); org.lwjgl.glfw.GLFW.glfwGetFramebufferSize(window,fw,fh);
         double sx=fw[0]>0?(double)ww[0]/fw[0]:1,sy=fh[0]>0?(double)wh[0]/fh[0]:1;
-        int width=(int)Math.round(p.width()*sx),height=(int)Math.round(p.height()*sy);
-        MmlfLog.info("render.capture","match_primary_size",Map.of("fromWidth",target.width,"fromHeight",target.height,"toWidth",p.width(),"toHeight",p.height(),"windowWidth",width,"windowHeight",height));
+        int width=(int)Math.round(wantWidth*sx),height=(int)Math.round(wantHeight*sy);
+        MmlfLog.info("render.capture","match_primary_size",Map.of("fromWidth",target.width,"fromHeight",target.height,"toWidth",wantWidth,"toHeight",wantHeight,"windowWidth",width,"windowHeight",height));
         org.lwjgl.glfw.GLFW.glfwSetWindowSize(window,width,height);
-    }
-    private static void publishNearby(Minecraft mc) {
-        Pose remote=lastRemotePose;
-        Vec3 center=(!primary && remote!=null) ? new Vec3(remote.playerX(),remote.playerY(),remote.playerZ()) : mc.player.position();
-        int cx=(int)Math.floor(center.x),cy=(int)Math.floor(center.y),cz=(int)Math.floor(center.z);
-        String dimension=mc.level.dimension().location().toString();
-        for(var entry:new java.util.ArrayList<>(localObjects.entrySet())) {
-            ObjectState old=entry.getValue();
-            if(!old.dimension().equals(dimension)) {
-                link.send("object","*",new ObjectState(old.id(),link.id,old.dimension(),old.x(),old.y(),old.z(),"minecraft:air",old.revision()+1,java.util.Map.of()));
-                localObjects.remove(entry.getKey());
-            }
-        }
-        java.util.Set<net.minecraft.core.BlockPos> found=new java.util.HashSet<>();
-        for(int x=cx-8;x<=cx+8;x++) for(int y=cy-5;y<=cy+5;y++) for(int z=cz-8;z<=cz+8;z++) {
-            net.minecraft.core.BlockPos pos=new net.minecraft.core.BlockPos(x,y,z);
-            if(!mc.level.hasChunkAt(pos)) continue;
-            var state=mc.level.getBlockState(pos); var key=net.minecraft.core.registries.BuiltInRegistries.BLOCK.getKey(state.getBlock());
-            if(key==null || state.isAir() || (key.getNamespace().equals("minecraft") && !ownedVanilla.contains(pos))) continue;
-            found.add(pos);
-            java.util.Map<String,String> properties=new java.util.TreeMap<>();
-            state.getValues().forEach((property,value)->properties.put(property.getName(),value.toString()));
-            var collision=state.getCollisionShape(mc.level,pos).toAabbs().stream().map(b->new double[]{b.minX,b.minY,b.minZ,b.maxX,b.maxY,b.maxZ}).toList();
-            properties.put("_collision",Wire.JSON.toJson(collision));
-            ObjectState old=localObjects.get(pos);
-            if(old==null || !old.dimension().equals(dimension) || !old.type().equals(key.toString()) || !old.state().equals(properties)) {
-                ObjectState value=new ObjectState(Messages.objectId(link.id,dimension,x,y,z),link.id,dimension,x,y,z,key.toString(),old==null || !old.dimension().equals(dimension)?1:old.revision()+1,properties);
-                localObjects.put(pos,value); link.send("object","*",value);
-            }
-        }
-        for(var entry:new java.util.ArrayList<>(localObjects.entrySet())) {
-            var pos=entry.getKey(); var old=entry.getValue();
-            if(!old.dimension().equals(dimension)) {
-                link.send("object","*",new ObjectState(old.id(),link.id,old.dimension(),old.x(),old.y(),old.z(),"minecraft:air",old.revision()+1,java.util.Map.of()));
-                localObjects.remove(pos); continue;
-            }
-            if(Math.abs(pos.getX()-cx)<=8 && Math.abs(pos.getY()-cy)<=5 && Math.abs(pos.getZ()-cz)<=8 && mc.level.hasChunkAt(pos) && !found.contains(pos)) {
-                link.send("object","*",new ObjectState(old.id(),link.id,old.dimension(),old.x(),old.y(),old.z(),"minecraft:air",old.revision()+1,java.util.Map.of()));
-                localObjects.remove(pos);
-            }
-        }
     }
     public static boolean requestInteraction() { return requestInteraction("use"); }
     public static boolean requestInteraction(String action) {
@@ -538,7 +572,7 @@ public final class BridgeCore {
         Vec3 end=start.add(Vec3.directionFromRotation(p.pitch(),p.yaw()).scale(request.reach()));
         var hit=mc.level.clip(new net.minecraft.world.level.ClipContext(start,end,net.minecraft.world.level.ClipContext.Block.OUTLINE,net.minecraft.world.level.ClipContext.Fluid.NONE,mc.player));
         if(hit.getType()==net.minecraft.world.phys.HitResult.Type.MISS) { sendMiss(request); return; }
-        ObjectState o=localObjects.get(hit.getBlockPos());
+        ObjectState o=Boundary.local(p.dimension(),hit.getBlockPos());
         if(o==null && !primary) {
             var hitType=net.minecraft.core.registries.BuiltInRegistries.BLOCK.getKey(mc.level.getBlockState(hit.getBlockPos()).getBlock());
             if(hitType.getNamespace().equals("minecraft") && !ownedVanilla.contains(hit.getBlockPos())) {sendMiss(request);return;}
@@ -558,7 +592,7 @@ public final class BridgeCore {
     private static void interact(Interaction action) {
         Minecraft mc=Minecraft.getInstance(); RayHit hit=action.hit();
         if(!handledActions.firstTime(action.actionId())) { MmlfLog.warn("interaction","duplicate_ignored",Map.of("actionId",action.actionId())); return; }
-        var pos=new net.minecraft.core.BlockPos(hit.x(),hit.y(),hit.z()); ObjectState current=localObjects.get(pos);
+        var pos=new net.minecraft.core.BlockPos(hit.x(),hit.y(),hit.z()); ObjectState current=Boundary.local(action.pose().dimension(),pos);
         if(mc.getSingleplayerServer()==null || mc.player==null || mc.level==null) { result(action,false,"FAIL","runtime_not_ready"); return; }
         if(hit.objectId()!=null && (current==null || !current.id().equals(hit.objectId()) || current.revision()!=hit.revision())) { result(action,false,"FAIL","stale_target"); return; }
         if(!mc.level.dimension().location().toString().equals(action.pose().dimension())) { result(action,false,"FAIL","dimension_mismatch"); return; }
@@ -646,7 +680,7 @@ public final class BridgeCore {
     public static void attackReleased() {
         if(!primary || link==null || lastAttack==0 || selfTestAttacking) return;
         lastAttack=0;
-        link.send("event","*",new Event("mmlf:attack_stop",Map.of()));
+        link.sendReliable("event","*",new Event("mmlf:attack_stop",Map.of()));
         Minecraft mc=Minecraft.getInstance(); stopMining(mc);
     }
     private static void stopMining(Minecraft mc) {
@@ -679,14 +713,14 @@ public final class BridgeCore {
             PlacementCheck check=it.next(); if(now-check.due()<0) continue; it.remove();
             server.execute(()->{
                 if(server.getPlayerList().getPlayers().isEmpty()) return;
-                var level=server.getPlayerList().getPlayers().getFirst().level(); var after=level.getBlockState(check.pos());
-                if(!after.equals(check.before())) { ownedVanilla.add(check.pos()); MmlfLog.info("items","native_placement",Map.of("actionId",check.actionId(),"position",check.pos().toShortString(),"state",after.toString())); }
+                var level=server.getPlayerList().getPlayers().getFirst().serverLevel(); var after=level.getBlockState(check.pos());
+                if(!after.equals(check.before())) { ownVanilla(level,check.pos()); MmlfLog.info("items","native_placement",Map.of("actionId",check.actionId(),"position",check.pos().toShortString(),"state",after.toString())); }
             });
         }
     }
     private static void result(Interaction action,boolean success,String outcome,String reason) {
         if(primary || link==null) return;
-        link.send("interaction_result",session.primary(),new InteractionResult(action.actionId(),link.id,success,outcome,GuiHost.instanceFor(action.actionId()),reason));
+        link.sendReliable("interaction_result",session.primary(),new InteractionResult(action.actionId(),link.id,success,outcome,GuiHost.instanceFor(action.actionId()),reason));
     }
     /** Primary: an owner's answer. Success gives the usual arm swing; a failure is shown instead of silently ignored. */
     private static void interactionResult(String source,InteractionResult result) {
@@ -703,7 +737,12 @@ public final class BridgeCore {
     }
     private static void metrics() {
         long now=System.nanoTime();
-        if(metricAt==0) { metricAt=now; previousCpu=ProcessHandle.current().info().totalCpuDuration().orElse(java.time.Duration.ZERO).toNanos(); return; }
+        if(metricAt==0) {
+            metricAt=now; previousCpu=ProcessHandle.current().info().totalCpuDuration().orElse(java.time.Duration.ZERO).toNanos();
+            for(var gc:java.lang.management.ManagementFactory.getGarbageCollectorMXBeans()) { previousGcCount+=Math.max(0,gc.getCollectionCount()); previousGcMillis+=Math.max(0,gc.getCollectionTime()); }
+            frameTimesMs.drain();
+            return;
+        }
         if(now-metricAt<java.util.concurrent.TimeUnit.SECONDS.toNanos(10)) return;
         long cpu=ProcessHandle.current().info().totalCpuDuration().orElse(java.time.Duration.ZERO).toNanos();
         double seconds=(now-metricAt)/1e9;
@@ -711,12 +750,29 @@ public final class BridgeCore {
         Map<String,Object> measurements=new java.util.LinkedHashMap<>();
         measurements.put("cpuOneCorePercent",100.0*(cpu-previousCpu)/(now-metricAt)); measurements.put("heapUsedMb",memory.getUsed()/1048576.0);
         measurements.put("worldFramesPerSecond",metricFrames/seconds); measurements.put("messageRttMs",link.rttMillis);
+        measurements.put("experiments",Experiments.describe());
+        var frameTimes=frameTimesMs.drain();
+        measurements.put("frameTimeP50Ms",frameTimes.p50()); measurements.put("frameTimeP95Ms",frameTimes.p95()); measurements.put("frameTimeP99Ms",frameTimes.p99());
+        long gcCount=0, gcMillis=0;
+        for(var gc:java.lang.management.ManagementFactory.getGarbageCollectorMXBeans()) { gcCount+=Math.max(0,gc.getCollectionCount()); gcMillis+=Math.max(0,gc.getCollectionTime()); }
+        // In one JVM both runtimes share the collector: these are JVM-wide, not this runtime's alone.
+        measurements.put("gcCollections",gcCount-previousGcCount); measurements.put("gcMillis",gcMillis-previousGcMillis);
+        previousGcCount=gcCount; previousGcMillis=gcMillis;
+        if(Experiments.ON_DEMAND && !primary) { measurements.put("idleFrames",idleFrames); measurements.put("busyFrames",busyFrames); idleFrames=busyFrames=0; }
+        var integrated=Minecraft.getInstance().getSingleplayerServer();
+        if(integrated!=null) { measurements.put("serverMspt",integrated.getAverageTickTimeNanos()/1e6); measurements.put("serverTicks",integrated.getTickCount());
+            int chunks=0; for(var level:integrated.getAllLevels()) chunks+=level.getChunkSource().getLoadedChunksCount(); measurements.put("loadedChunks",chunks); }
+        if(Experiments.LOCKSTEP) measurements.putAll(TickSync.metrics());
+        if(Experiments.FOLLOW) measurements.putAll(ChunkFollow.metrics());
         try {var rss=ProcessMemory.residentMb();if(rss.isPresent()) measurements.put("rssMb",rss.getAsDouble());else measurements.put("rssAvailable",false);} catch(LinkageError | RuntimeException e) {measurements.put("rssAvailable",false);MmlfLog.sampled("metrics","rss_unavailable",60000,Map.of("exception",e.getClass().getName()));}
         MmlfLog.info("metrics","runtime",measurements);
         metricFrames=0; metricAt=now; previousCpu=cpu;
     }
     public static void captureFrame() {
         metricFrames++;
+        long frameNow=System.nanoTime();
+        if(lastWorldFrame!=0) frameTimesMs.add((frameNow-lastWorldFrame)/1e6);
+        lastWorldFrame=frameNow;
         if (primary) { if(CPU_COMPOSITOR) composite(); else gpuComposite(); return; }
         Pose pose=lastRemotePose;
         long captureNow=System.nanoTime();
@@ -724,7 +780,7 @@ public final class BridgeCore {
         Minecraft mc=Minecraft.getInstance();
         if(link==null || !link.ready() || pose==null || mc.level==null) return;
         try {
-            if(frames==null) frames=FrameFile.writer(session.framePath(link.id));
+            if(frames==null) frames=Frames.writer(link.id);
             if(!mc.level.dimension().location().toString().equals(pose.dimension())) { FrameExporter.drain(frames,link.id,false); return; }
             var target=mc.getMainRenderTarget();
             var camera=mc.gameRenderer.getMainCamera(); Vec3 at=camera.getPosition();
@@ -753,9 +809,16 @@ public final class BridgeCore {
             if(!"opengl-window-depth".equals(frame.depthConvention()) || !frame.bottomUp()) continue;
             FrameTiming.Age age=FrameTiming.age(frame,link.calibration(),System.nanoTime());
             if(age==null || age.estimatedNanos()+age.uncertaintyNanos()>STALE_NANOS) {
+                layer.stale++;
                 MmlfLog.sampled("render.composite","stale_or_uncalibrated",1000,Map.of("frameId",frame.frameId())); continue;
             }
             long metricNow=System.nanoTime();
+            long publishedAt=poseHistory.publishedAt(frame.cameraSequence());
+            if(publishedAt!=Long.MIN_VALUE) layer.endToEndMs.add((metricNow-publishedAt)/1e6); else layer.unknownPose++;
+            layer.posesBehind.add(poseHistory.behind(frame.cameraSequence()));
+            layer.composited++;
+            if(frame.frameId()==layer.lastFrameId) layer.repeated++;
+            layer.lastFrameId=frame.frameId();
             layer.frameAgeMs.add(Math.max(0,age.estimatedNanos()/1e6));
             var current=mc.gameRenderer.getMainCamera();
             double dy=net.minecraft.util.Mth.wrapDegrees(current.getYRot()-frame.pose().yaw());
@@ -772,9 +835,18 @@ public final class BridgeCore {
                     "ageP50Ms",ages.p50(),"ageP95Ms",ages.p95(),"ageP99Ms",ages.p99(),
                     "angularP50Degrees",angles.p50(),"angularP95Degrees",angles.p95(),"angularP99Degrees",angles.p99(),
                     "clockUncertaintyMs",age.uncertaintyNanos()/1e6));
+                var e2e=layer.endToEndMs.drain(); var behind=layer.posesBehind.drain();
+                Map<String,Object> sync=new java.util.LinkedHashMap<>();
+                sync.put("runtime",frame.runtime()); sync.put("composited",layer.composited); sync.put("repeatedFrames",layer.repeated);
+                sync.put("staleRejected",layer.stale); sync.put("unknownPose",layer.unknownPose);
+                sync.put("endToEndP50Ms",e2e.p50()); sync.put("endToEndP95Ms",e2e.p95()); sync.put("endToEndP99Ms",e2e.p99());
+                sync.put("posesBehindP50",behind.p50()); sync.put("posesBehindP95",behind.p95());
+                sync.put("frameChannel",Frames.mode(session).name());
+                MmlfLog.info("metrics","frame_sync",sync);
+                layer.composited=layer.repeated=layer.stale=layer.unknownPose=0;
                 layer.metricSince=metricNow;
             }
-            RemoteCompositor.draw(frame,pixels,current,target.width,target.height);
+            if(!Experiments.GEOMETRY) RemoteCompositor.draw(frame,pixels,current,target.width,target.height);
             if(!compositeReported) {compositeReported=true;System.out.println("MMLF COMPOSITE READY remote="+frame.runtime()+" mode=gpu");}
         }
     }
@@ -796,7 +868,7 @@ public final class BridgeCore {
                     long now=System.nanoTime(); if(now-layer.nextOpen<0) continue;
                     layer.nextOpen=now+500_000_000L;
                     // The background creates its file on its first capture; until then there is nothing to poll.
-                    try { layer.file=FrameFile.reader(session.framePath(runtime)); }
+                    try { layer.file=Frames.reader(runtime); }
                     catch(java.io.IOException e) { MmlfLog.sampled("render.transfer","frame_file_unavailable",5000,Map.of("runtime",runtime,"reason",e.toString())); continue; }
                 }
                 FrameFile.Latest latest=layer.file.readLatest(layer.cursor,layer.spare);

@@ -18,4 +18,14 @@ class MmlfLogTest {
    assertTrue(Files.readString(temp.resolve("logs/neoforge.jsonl")).contains("\"level\":\"DEBUG\""));
   } finally {MmlfLog.close();}
  }
+ /** A block that just broke reports an infinite break speed; logging it once crashed the game tick that logged it. */
+ @Test void nonFiniteNumbersAreLoggedAsText() throws Exception {
+  try {
+   MmlfLog.configure("neoforge",temp,"DEBUG");
+   assertDoesNotThrow(()->MmlfLog.debug("interaction","mining",Map.of("speed",Float.POSITIVE_INFINITY,"ratio",Double.NaN)));
+   MmlfLog.close();
+   String log=Files.readString(temp.resolve("logs/neoforge.jsonl"));
+   assertTrue(log.contains("\"speed\":\"Infinity\"")); assertTrue(log.contains("\"ratio\":\"NaN\""));
+  } finally {MmlfLog.close();}
+ }
 }

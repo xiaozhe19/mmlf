@@ -43,7 +43,7 @@ final class WorldFollow {
     private static void announce(Minecraft mc) {
         var server=mc.getSingleplayerServer();
         if(server==null) {
-            if(announced!=null) { BridgeCore.remoteWorldsClosed(); BridgeCore.send("event","*",new Event("mmlf:world_closed",Map.of())); MmlfLog.info("world","closed_sent",Map.of("save",announced)); announced=null; }
+            if(announced!=null) { BridgeCore.remoteWorldsClosed(); BridgeCore.sendReliable("event","*",new Event("mmlf:world_closed",Map.of())); MmlfLog.info("world","closed_sent",Map.of("save",announced)); announced=null; }
             return;
         }
         Path root=server.getWorldPath(LevelResource.ROOT).toAbsolutePath().normalize();

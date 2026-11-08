@@ -25,6 +25,9 @@ public abstract class MinecraftMixin {
   if(!attacking) BridgeCore.attackReleased();
   if(attacking && BridgeCore.requestInteraction("attack")) ci.cancel();
  }
+ /** Hosted in-JVM runtimes end before this game releases its window and GL resources. */
+ @Inject(method="destroy",at=@At("HEAD"))
+ private void mmlf$destroying(CallbackInfo ci) { BridgeCore.destroying(); }
  @Inject(method="stop",at=@At("HEAD"))
  private void mmlf$closing(CallbackInfo ci) { BridgeCore.closing(); }
  /** A hosted screen reports its opening, switching and closing from the place every screen change goes through. */

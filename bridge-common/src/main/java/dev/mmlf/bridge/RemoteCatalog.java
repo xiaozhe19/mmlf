@@ -68,7 +68,7 @@ public final class RemoteCatalog {
         if(mc.player==null) return;
         long now=System.nanoTime(); if(now-lastRequest<5_000_000_000L) return; lastRequest=now;
         for(String peer:peers) if(!peer.equals(BridgeCore.runtimeId()) && !owners.containsKey(peer))
-            BridgeCore.send("event",peer,new Event("mmlf:catalog_request",Map.of()));
+            BridgeCore.sendReliable("event",peer,new Event("mmlf:catalog_request",Map.of()));
     }
     static void forget(String runtime) {
         Owned removed=owners.remove(runtime);
@@ -117,7 +117,7 @@ public final class RemoteCatalog {
             try {
                 var pixels=VisualLayers.renderAtlas(iconStacks,CELL,COLUMNS,width,height);
                 String name=BridgeCore.runtimeId()+"-atlas-"+(++atlasSequence);
-                try(FrameFile file=FrameFile.writer(BridgeCore.session().framePath(name),width*height)) {
+                try(FrameFile file=Frames.writer(name,width*height)) {
                     var depth=org.lwjgl.BufferUtils.createByteBuffer(width*height*4);
                     if(file.publish(1,width,height,pixels,depth,new byte[0])<0) throw new java.io.IOException("atlas slots busy");
                 }
@@ -132,7 +132,7 @@ public final class RemoteCatalog {
             encoded=Wire.JSON.toJson(new Catalog(atlasFile,width,height,lean,tabs));
             MmlfLog.warn("items","catalog_tooltips_dropped",Map.of("length",encoded.length()));
         }
-        BridgeCore.send("event",primary,new Event("mmlf:catalog",Map.of("catalog",encoded)));
+        BridgeCore.sendReliable("event",primary,new Event("mmlf:catalog",Map.of("catalog",encoded)));
         MmlfLog.info("items","catalog_sent",Map.of("entries",entries.size(),"tabs",tabs.size(),"icons",iconStacks.size(),"bytes",encoded.length()));
     }
     private static int entry(ItemStack stack,List<Entry> entries,List<ItemStack> icons,Map<String,Integer> byPayload,net.minecraft.core.HolderLookup.Provider registries,Minecraft mc) {
@@ -189,7 +189,7 @@ public final class RemoteCatalog {
     }
     private static void loadAtlas(Minecraft mc,String owner,Owned owned,Catalog catalog) {
         int w=catalog.atlasWidth(), h=catalog.atlasHeight();
-        try(FrameFile file=FrameFile.reader(BridgeCore.session().framePath(catalog.atlasFile()),w*h)) {
+        try(FrameFile file=Frames.reader(catalog.atlasFile(),w*h)) {
             var latest=file.readLatest(null,null);
             if(latest==null || latest.width()!=w || latest.height()!=h) throw new java.io.IOException("atlas unavailable");
             var bytes=latest.pixels().color(); var image=new NativeImage(w,h,false);

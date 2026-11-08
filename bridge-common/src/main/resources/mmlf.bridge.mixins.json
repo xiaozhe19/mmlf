@@ -12,6 +12,7 @@
     "RenderSystemMixin",
     "GuiItemMixin",
     "SectionCompilerMixin",
+    "LevelRendererMixin",
     "HitOutlineMixin",
     "WindowMixin",
     "MouseHandlerAccessor",
@@ -24,13 +25,22 @@
     "CreativeTabMixin",
     "GameModeAccessor",
     "FollowedGroundMixin",
-    "GuiMixin"
+    "GuiMixin",
+    "InJvmExitMixin",
+    "SodiumBlockRendererMixin"
   ],
   "injectors": {
     "defaultRequire": 1
   },
   "mixins": [
     "EntityCollisionMixin",
+    "ServerTickMixin",
+    "ChunkMapMixin",
+    "LevelChunkMixin",
+    "BlockStateSignalMixin",
+    "ComparatorMixin",
+    "HopperContainerMixin",
+    "MirroredNeighborMixin",
     "ContainerMenuMixin",
     "SlotMixin",
     "ItemPickupMixin",

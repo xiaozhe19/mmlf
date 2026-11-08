@@ -8,7 +8,7 @@ public final class WorldIndex {
     private final Map<String,ObjectState> objects = new HashMap<>();
     private final Map<String,String> locations = new HashMap<>();
     public synchronized void update(String sender, ObjectState next) {
-        if (!sender.equals(next.owner()) || !next.id().equals(objectId(sender, next.dimension(), next.x(), next.y(), next.z())))
+        if (!sender.equals(next.owner()) || !next.id().equals(objectId(sender, next.dimension(), next.x(), next.y(), next.z(), next.generation())))
             throw new IllegalArgumentException("object owner/id mismatch");
         if (next.revision() < 1 || next.type() == null || next.state() == null)
             throw new IllegalArgumentException("invalid object state");

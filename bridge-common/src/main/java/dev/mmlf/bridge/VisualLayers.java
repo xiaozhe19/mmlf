@@ -64,7 +64,7 @@ public final class VisualLayers {
   String key=owner+suffix;long now=System.nanoTime();Long due=nextOpen.get(key);
   if(due!=null && now-due<0) return null;
   nextOpen.put(key,now+500_000_000L);
-  try {return new Source(owner,FrameFile.reader(BridgeCore.session().framePath(key),maxPixels));}
+  try {return new Source(owner,Frames.reader(key,maxPixels));}
   catch(java.io.IOException | IllegalArgumentException e) {MmlfLog.sampled("render.visual","file_unavailable",5000,Map.of("file",key,"reason",e.toString()));return null;}
  }
  public static void beforeHand() {
@@ -102,7 +102,7 @@ public final class VisualLayers {
    // Crop offsets are only meaningful while this framebuffer matches the primary's.
    Pose pose=BridgeCore.renderedPose();
    if(pose==null || pose.width()!=target.width || pose.height()!=target.height) return;
-   if(handWriter==null) handWriter=FrameFile.writer(BridgeCore.session().framePath(BridgeCore.runtimeId()+"-hand"));
+   if(handWriter==null) handWriter=Frames.writer(BridgeCore.runtimeId()+"-hand");
    long id=++sequence;
    Visual visual=new Visual(new Frame(BridgeCore.runtimeId(),id,pose,-1,crop.width(),crop.height(),System.nanoTime(),true,"overlay"),RemoteItems.selectedReference(),crop.x(),crop.y());
    int slot=handWriter.publish(id,crop.width(),crop.height(),crop.pixels(),zeroDepth,encode(visual));
@@ -203,7 +203,7 @@ public final class VisualLayers {
    finally {modelView.popMatrix();RenderSystem.applyModelViewMatrix();}
    iconColor.clear();GL11.glReadPixels(0,0,32,32,GL11.GL_RGBA,GL11.GL_UNSIGNED_BYTE,iconColor);
   } finally {RenderSystem.setProjectionMatrix(previous,sorting);mc.getMainRenderTarget().bindWrite(true);}
-  if(iconWriter==null) iconWriter=FrameFile.writer(BridgeCore.session().framePath(BridgeCore.runtimeId()+"-icon"),ICON_PIXELS);
+  if(iconWriter==null) iconWriter=Frames.writer(BridgeCore.runtimeId()+"-icon",ICON_PIXELS);
   ByteBuffer empty=BufferUtils.createByteBuffer(32*32*4);
   long id=++sequence;
   Visual visual=new Visual(new Frame(BridgeCore.runtimeId(),id,BridgeCore.renderedPose(),-1,32,32,System.nanoTime(),true,"overlay"),reference,0,0);
@@ -247,7 +247,7 @@ public final class VisualLayers {
  public static void flushIconRequests() {
   long now=System.nanoTime();if(missingIcons.isEmpty() || now-lastIconRequest<500_000_000L) return;
   lastIconRequest=now;
-  for(var entry:missingIcons.entrySet()) BridgeCore.send("event",entry.getKey(),new Event("mmlf:icon_request",Map.of("references",String.join(",",entry.getValue().stream().limit(32).toList()))));
+  for(var entry:missingIcons.entrySet()) BridgeCore.sendReliable("event",entry.getKey(),new Event("mmlf:icon_request",Map.of("references",String.join(",",entry.getValue().stream().limit(32).toList()))));
   missingIcons.clear();
  }
  public static boolean drawIcon(GuiGraphics graphics,ItemStack stack,int x,int y) {

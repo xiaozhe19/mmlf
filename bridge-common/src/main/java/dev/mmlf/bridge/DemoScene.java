@@ -22,6 +22,18 @@ public final class DemoScene {
  /** {@code properties} sets block state values by name; {@code items} ("id*count") fills a container block entity. */
  public record Placement(String runtime,String block,int x,int y,int z,boolean optional,Map<String,String> properties,List<String> items) {}
  public record Scene(List<Placement> placements) {}
+ /** The scene as loaded, for the collaboration self-test. */
+ static Scene scene;
+ static Session sceneSession;
+ /**
+  * A placement's runtime may be {@code primary} or {@code background} instead of a loader, and its block may name
+  * {@code {primary}} or {@code {background}}, so one scene tests the same arrangement whichever runtime is the primary.
+  */
+ static String owner(Placement item,Session session) {
+  return switch(item.runtime()) { case "primary" -> session.primary(); case "background" -> background(session); default -> item.runtime(); };
+ }
+ static String block(Placement item,Session session) { return item.block().replace("{primary}",session.primary()).replace("{background}",background(session)); }
+ private static String background(Session session) { return session.primary().equals("fabric")?"neoforge":"fabric"; }
  private static net.minecraft.world.level.block.state.BlockState withProperties(net.minecraft.world.level.block.state.BlockState state,Map<String,String> properties) {
   if(properties==null) return state;
   for(var entry:properties.entrySet()) for(var property:state.getProperties()) if(property.getName().equals(entry.getKey())) state=withValue(state,property,entry.getValue());
@@ -32,14 +44,19 @@ public final class DemoScene {
  }
  public static void tick(Minecraft mc,Session session,String runtime) {
   if(session==null || !Files.isRegularFile(session.root().resolve("scenario.json"))) return;
-  if(prepared && !hidden && !BridgeCore.isPrimary() && "true".equals(System.getenv("MMLF_HIDE_SECONDARY"))) {
+  if(prepared && !hidden && !BridgeCore.isPrimary() && RuntimeContext.current().hiddenWindow()) {
    org.lwjgl.glfw.GLFW.glfwHideWindow(mc.getWindow().getWindow()); hidden=true;
   }
   mc.options.pauseOnLostFocus=false;
+  // thin_world: a void world has nothing to stand on, and the player falls out of it before the primary's pose arrives.
+  if(Experiments.THIN_WORLD && !BridgeCore.isPrimary() && mc.getSingleplayerServer()!=null) {
+   var server=mc.getSingleplayerServer();
+   server.execute(()->{ for(var player:server.getPlayerList().getPlayers()) { player.setNoGravity(true); if(player.getY()<0) player.teleportTo(0.5,100,4.5); } });
+  }
 
   if(!started && mc.screen instanceof net.minecraft.client.gui.screens.AccessibilityOnboardingScreen) mc.setScreen(new net.minecraft.client.gui.screens.TitleScreen());
   // The primary opens its world only when a background runtime has loaded its own, so both appear together.
-  if(!started && !skipWait && BridgeCore.isPrimary() && mc.level==null && !BridgeCore.remoteWorldReady()) {
+  if(!started && !skipWait && !SessionBootstrap.solo() && BridgeCore.isPrimary() && mc.level==null && !BridgeCore.remoteWorldReady()) {
    if(mc.screen instanceof net.minecraft.client.gui.screens.TitleScreen) mc.setScreen(new WaitingScreen(()->{skipWait=true;mc.setScreen(new net.minecraft.client.gui.screens.TitleScreen());}));
    return;
   }
@@ -51,8 +68,11 @@ public final class DemoScene {
    mc.options.framerateLimit().set(60);
    mc.options.bobView().set(false);
    mc.options.fov().set(70);
+   boolean thin=Experiments.THIN_WORLD && !BridgeCore.isPrimary();
+   if(thin) MmlfLog.info("experiment","thin_world_create",Map.of("runtime",runtime));
+   if(Experiments.SMALL_VIEW && !BridgeCore.isPrimary()) mc.options.renderDistance().set(2);
    mc.createWorldOpenFlows().createFreshLevel("mmlf-"+System.currentTimeMillis(),settings,new WorldOptions(0L,false,false),
-    registries->registries.registryOrThrow(Registries.WORLD_PRESET).getOrThrow(WorldPresets.FLAT).createWorldDimensions(),mc.screen);
+    registries->thin ? VoidWorld.dimensions(registries) : registries.registryOrThrow(Registries.WORLD_PRESET).getOrThrow(WorldPresets.FLAT).createWorldDimensions(),mc.screen);
   }
   // Background runtimes may join a minute after the primary; the scripted test starts once a remote frame has arrived.
   if(prepared && BridgeCore.isPrimary() && BridgeCore.remoteLayerReady() && mc.player!=null && Files.exists(session.root().resolve("self-test"))) {
@@ -86,11 +106,14 @@ public final class DemoScene {
    if(testTicks==390) net.minecraft.client.Screenshot.grab(mc.gameDirectory,"mmlf-thirdparty-demo.png",mc.getMainRenderTarget(),message->System.out.println("MMLF screenshot "+message.getString()));
    if(testTicks==200) System.out.println("MMLF SELFTEST request="+BridgeCore.requestInteraction());
    if(testTicks>=600) GuiSelfTest.tick(mc,testTicks-600,side);
+   if(GuiSelfTest.finished()) CollabSelfTest.tick(mc);
+   if(CollabSelfTest.finished() && Experiments.PROBE) ExperimentProbe.tick(mc);
   }
   if(!prepared && mc.player!=null && mc.getSingleplayerServer()!=null && !mc.getSingleplayerServer().getPlayerList().getPlayers().isEmpty()) {
    prepared=true;
    try {
     Scene scene=Wire.JSON.fromJson(Files.readString(session.root().resolve("scenario.json")),Scene.class);
+    DemoScene.scene=scene; sceneSession=session;
     for(Placement item:scene.placements()) if(!item.runtime().equals(runtime) && item.block().endsWith(":demo_block")) side=item.x()<0?-1:1;
     var server=mc.getSingleplayerServer();
     server.execute(()->{
@@ -98,17 +121,18 @@ public final class DemoScene {
      level.setDayTime(6000);level.setWeatherParameters(0,0,false,false);
      level.getGameRules().getRule(GameRules.RULE_DAYLIGHT).set(false,server);
      level.getGameRules().getRule(GameRules.RULE_WEATHER_CYCLE).set(false,server);
-     for(int x=-7;x<=7;x++) for(int z=-6;z<=8;z++) {
+     // A thin background has no vanilla terrain of its own: the floor exists only in the primary's world.
+     if(!(Experiments.THIN_WORLD && !BridgeCore.isPrimary())) for(int x=-7;x<=7;x++) for(int z=-6;z<=8;z++) {
       for(int y=100;y<=106;y++) level.setBlock(new BlockPos(x,y,z),net.minecraft.world.level.block.Blocks.AIR.defaultBlockState(),3);
       level.setBlock(new BlockPos(x,99,z),net.minecraft.world.level.block.Blocks.SMOOTH_STONE.defaultBlockState(),3);
      }
-     for(Placement item:scene.placements()) if(item.runtime().equals(runtime)) {
-      var key=ResourceLocation.parse(item.block());
+     for(Placement item:scene.placements()) if(owner(item,session).equals(runtime)) {
+      var key=ResourceLocation.parse(block(item,session));
       if(!BuiltInRegistries.BLOCK.containsKey(key)) { if(item.optional()) continue; throw new IllegalStateException("Missing scenario block "+key); }
       var blockState=withProperties(BuiltInRegistries.BLOCK.get(key).defaultBlockState(),item.properties());
       var at=new BlockPos(item.x(),item.y(),item.z());
       level.setBlock(at,blockState,3);
-      if(key.getNamespace().equals("minecraft")) BridgeCore.ownVanilla(at);
+      if(key.getNamespace().equals("minecraft")) BridgeCore.ownVanilla(level,at);
       if(item.items()!=null && level.getBlockEntity(at) instanceof net.minecraft.world.Container container) {
        int slot=0;
        for(String entry:item.items()) {

@@ -14,7 +14,12 @@ public final class FabricTestMod implements ModInitializer {
   var id=ResourceLocation.fromNamespaceAndPath("mmlf_fabric_test","demo_block");
   Registry.register(BuiltInRegistries.BLOCK,id,BLOCK);
   Registry.register(BuiltInRegistries.ITEM,id,new BlockItem(BLOCK,new Item.Properties()));
-  for(var entry:java.util.Map.<String,Block>of("gui_block",GUI_BLOCK,"box_block",BOX_BLOCK).entrySet()) {
+  Block crate=new CollabBlocks.CrateBlock();
+  var crateType=Registry.register(BuiltInRegistries.BLOCK_ENTITY_TYPE,ResourceLocation.fromNamespaceAndPath("mmlf_fabric_test","crate"),
+   net.fabricmc.fabric.api.object.builder.v1.block.entity.FabricBlockEntityTypeBuilder.create(CollabBlocks.CrateBlockEntity::new,crate).build());
+  CollabBlocks.crateType=()->crateType;
+  for(var entry:java.util.Map.<String,Block>of("gui_block",GUI_BLOCK,"box_block",BOX_BLOCK,"signal_block",new CollabBlocks.SignalBlock(),
+    "lamp_block",new CollabBlocks.LampBlock(),"probe_block",new CollabBlocks.ProbeBlock(),"crate_block",crate).entrySet()) {
    var key=ResourceLocation.fromNamespaceAndPath("mmlf_fabric_test",entry.getKey());
    Registry.register(BuiltInRegistries.BLOCK,key,entry.getValue());
    Registry.register(BuiltInRegistries.ITEM,key,new BlockItem(entry.getValue(),new Item.Properties()));

@@ -9,6 +9,8 @@ import net.minecraft.world.level.block.RenderShape;
 import net.minecraft.world.level.block.state.BlockState;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.injection.At;
+import org.spongepowered.asm.mixin.injection.Inject;
+import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
 /**
  * Leaves blocks another runtime draws out of this runtime's chunk meshes. The check sits on the section loop's render
  * shape test rather than on BlockRenderDispatcher.renderBatched, because Fabric's Indigo renderer redirects that call.
@@ -20,5 +22,10 @@ public abstract class SectionCompilerMixin {
  private RenderShape mmlf$owned(BlockState state,Operation<RenderShape> original,@Local(ordinal=2) BlockPos pos) {
   RenderShape shape=original.call(state);
   return shape==RenderShape.MODEL && !BridgeCore.renderOwned(state,pos) ? RenderShape.INVISIBLE : shape;
+ }
+ /** Experiment {@code geometry}: a background keeps a copy of each compiled section for the primary to draw. */
+ @Inject(method="compile*",at=@At("RETURN"),require=0)
+ private void mmlf$captureGeometry(CallbackInfoReturnable<SectionCompiler.Results> ci,@Local(argsOnly=true) net.minecraft.core.SectionPos section) {
+  if(dev.mmlf.bridge.Experiments.GEOMETRY) dev.mmlf.bridge.render.GeometryLayer.captured(section,ci.getReturnValue().renderedLayers);
  }
 }

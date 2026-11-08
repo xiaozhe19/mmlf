@@ -34,6 +34,8 @@ public final class InventoryBridge {
     // owner
     private static final InventoryLease.Holding holding=new InventoryLease.Holding();
     private static List<SlotItem> reported;
+    /** Owner: version of the newest primary snapshot (mirror or grant) applied; 0 after the primary was lost. */
+    private static long primaryVersion;
     /** Owner: the inventory as the primary last mirrored it; anything else in it was changed by this runtime. */
     private static List<SlotItem> baseline;
     private record Kept(UUID token,ItemStack stack) {}
@@ -73,7 +75,7 @@ public final class InventoryBridge {
             String id=UUID.randomUUID().toString();
             var current=new InventorySnapshot(id,owner,lease.nextVersion(),player.getInventory().selected,encodeAll(player),InventoryLease.GRANT);
             if(!lease.grant(owner,id,current)) { MmlfLog.warn("inventory","grant_refused",Map.of("owner",owner,"holder",String.valueOf(lease.holder()))); return; }
-            BridgeCore.send("inventory",owner,current);
+            BridgeCore.sendReliable("inventory",owner,current);
             MmlfLog.info("inventory","lease_granted",Map.of("owner",owner,"leaseId",id,"version",current.version()));
         });
     }
@@ -102,6 +104,11 @@ public final class InventoryBridge {
             return;
         }
         if(!message.source().equals(BridgeCore.primaryId()) || !self.equals(snapshot.authority()) && !InventoryLease.MIRROR.equals(snapshot.reason())) return;
+        // Mirrors and grants share the primary's version counter; one overtaken by a newer one must not undo it.
+        synchronized(InventoryBridge.class) {
+            if(snapshot.version()<=primaryVersion) { MmlfLog.warn("inventory","stale_snapshot",Map.of("version",snapshot.version(),"applied",primaryVersion,"reason",String.valueOf(snapshot.reason()))); return; }
+            primaryVersion=snapshot.version();
+        }
         if(InventoryLease.GRANT.equals(snapshot.reason())) {
             if(!GuiHost.hosting()) { MmlfLog.warn("inventory","grant_without_screen",Map.of("leaseId",String.valueOf(snapshot.leaseId()))); return; }
             holding.begin(snapshot.leaseId(),snapshot.version());
@@ -122,7 +129,6 @@ public final class InventoryBridge {
                 if(stack.has(DataComponents.CUSTOM_DATA) && stack.get(DataComponents.CUSTOM_DATA).contains(PLACEHOLDER)) unavailable++;
                 inventory.setItem(slot.slot(),stack);
             }
-            if(!primary && snapshot.selected()>=0 && snapshot.selected()<9) inventory.selected=snapshot.selected();
             player.inventoryMenu.broadcastChanges(); player.containerMenu.broadcastChanges();
             if(!primary && holding.active()) reported=encodeAll(player);
             if(!primary && !holding.active()) baseline=encodeAll(player);
@@ -139,7 +145,7 @@ public final class InventoryBridge {
         if(slots.equals(reported)) return;
         verifyPlaceholders(slots);
         reported=slots;
-        BridgeCore.send("inventory",BridgeCore.primaryId(),new InventorySnapshot(holding.leaseId(),self,holding.next(),player.getInventory().selected,slots,InventoryLease.UPDATE));
+        BridgeCore.sendReliable("inventory",BridgeCore.primaryId(),new InventorySnapshot(holding.leaseId(),self,holding.next(),player.getInventory().selected,slots,InventoryLease.UPDATE));
     }
     /** Render thread, when the hosted screen ends: the inventory goes back once the server has closed the menu. */
     static void returnLease(Runnable then) {
@@ -154,13 +160,13 @@ public final class InventoryBridge {
         returning=null;
         if(player!=null && holding.active()) {
             List<SlotItem> slots=encodeAll(player); verifyPlaceholders(slots);
-            BridgeCore.send("inventory",BridgeCore.primaryId(),new InventorySnapshot(holding.leaseId(),self,holding.next(),player.getInventory().selected,slots,InventoryLease.RETURN));
+            BridgeCore.sendReliable("inventory",BridgeCore.primaryId(),new InventorySnapshot(holding.leaseId(),self,holding.next(),player.getInventory().selected,slots,InventoryLease.RETURN));
             MmlfLog.info("inventory","lease_returning",Map.of("leaseId",holding.leaseId(),"menuClosed",closed));
         }
         holding.end(); reported=null; baseline=null;
         mc.execute(then);
     }
-    static void primaryLost() { holding.end(); returning=null; reported=null; baseline=null; }
+    static void primaryLost() { holding.end(); returning=null; reported=null; baseline=null; synchronized(InventoryBridge.class) { primaryVersion=0; } }
 
     /**
      * Owner, outside a lease: this runtime's own game changed the mirrored inventory (picked up an item a machine
@@ -174,7 +180,7 @@ public final class InventoryBridge {
         for(int i=0;i<current.size() && i<baseline.size();i++) if(!same(current.get(i),baseline.get(i))) { after.add(current.get(i)); before.add(baseline.get(i)); }
         if(after.isEmpty()) return;
         baseline=current;
-        BridgeCore.send("inventory",BridgeCore.primaryId(),new InventorySnapshot(null,self,0,player.getInventory().selected,after,InventoryLease.OWNER_CHANGE,before));
+        BridgeCore.sendReliable("inventory",BridgeCore.primaryId(),new InventorySnapshot(null,self,0,player.getInventory().selected,after,InventoryLease.OWNER_CHANGE,before));
         MmlfLog.info("inventory","owner_change_sent",Map.of("slots",after.size(),"slot",after.getFirst().slot(),"before",before.getFirst().count(),"after",after.getFirst().count()));
     }
     /** Primary: applies an owner's own changes slot by slot, each only over the content the owner saw. */

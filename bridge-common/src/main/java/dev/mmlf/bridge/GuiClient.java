@@ -191,7 +191,7 @@ public final class GuiClient {
         if(source==null) {
             long now=System.nanoTime(); if(now-nextOpen<0) return;
             nextOpen=now+250_000_000L;
-            try { source=FrameFile.reader(BridgeCore.session().framePath(runtime+"-gui")); sourceRuntime=runtime; cursor=null; }
+            try { source=Frames.reader(runtime+"-gui"); sourceRuntime=runtime; cursor=null; }
             catch(java.io.IOException | IllegalArgumentException e) { MmlfLog.sampled("gui","frame_file_unavailable",5000,Map.of("runtime",runtime,"reason",e.toString())); return; }
         }
         try(PixelTransfer transfer=new PixelTransfer()) {

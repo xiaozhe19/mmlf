@@ -4,6 +4,7 @@ import dev.mmlf.common.*;
 import dev.mmlf.common.Messages.*;
 import static dev.mmlf.common.Messages.objectId;
 import java.net.URI;
+import java.nio.file.*;
 import java.util.*;
 import java.util.concurrent.*;
 import org.java_websocket.client.WebSocketClient;
@@ -88,6 +89,71 @@ class CoordinatorIntegrationTest {
    neo.closeBlocking(); clients.remove(neo);
    assertEquals("neo",primary.await("runtime_left").data().get("runtime").getAsString());
   } finally { for(Client c:clients) c.closeBlocking(); server.stop(); }
+ }
+ @Test void reliableDeliveriesAreCheckedAndThePlayerBelongsToThePrimary() throws Exception {
+  Coordinator server=new Coordinator(0,"secret"); server.start();
+  for(int i=0;i<200 && server.getPort()==0;i++) Thread.sleep(10);
+  List<Client> clients=new ArrayList<>();
+  try {
+   Map<String,String> incarnations=new HashMap<>();
+   Welcome last=null;
+   for(String id:List.of("fabric","neo")) {
+    Client c=new Client(server.getPort()); clients.add(c); assertTrue(c.connectBlocking(5,TimeUnit.SECONDS));
+    Hello hello=new Hello("secret",id,"1.21.1",id.equals("fabric")); incarnations.put(id,hello.incarnation());
+    c.send(Wire.of("hello",id,"coordinator",hello).encode());
+    last=c.await("welcome").body(Welcome.class);
+   }
+   assertEquals(incarnations,last.incarnations(),"a newcomer learns every incarnation");
+   Client fabric=clients.get(0),neo=clients.get(1);
+   Wire joined=fabric.await("runtime_joined");
+   if(joined.data().get("runtime").getAsString().equals("fabric")) joined=fabric.await("runtime_joined");
+   assertEquals(incarnations.get("neo"),joined.data().get("incarnation").getAsString());
+   var event=Wire.of("event","fabric","neo",new Event("e",Map.of()));
+   fabric.send(event.withDelivery(new ReliableLink.Delivery(incarnations.get("fabric"),incarnations.get("neo"),1,1)).encode());
+   assertEquals(1,neo.await("event").delivery().seq(),"the delivery header reaches the receiver");
+   fabric.send(event.withDelivery(new ReliableLink.Delivery("someone-else",incarnations.get("neo"),2,1)).encode());
+   assertTrue(fabric.await("error").data().get("message").getAsString().contains("reliable"),"a stream must be the sender's own");
+   var broadcast=Wire.of("event","fabric","*",new Event("e",Map.of()));
+   fabric.send(broadcast.withDelivery(new ReliableLink.Delivery(incarnations.get("fabric"),incarnations.get("neo"),2,1)).encode());
+   assertTrue(fabric.await("error").data().get("message").getAsString().contains("reliable"),"reliable messages have one receiver");
+   neo.send(Wire.of("ack","neo","fabric",new ReliableLink.Ack(incarnations.get("fabric"),1)).encode());
+   assertEquals(1,fabric.await("ack").body(ReliableLink.Ack.class).seq());
+   var state=new PlayerState(1,3,"minecraft:stone",true,"survival","zh_cn");
+   fabric.send(Wire.of("player","fabric","*",state).encode());
+   assertEquals(3,neo.await("player").body(PlayerState.class).selected());
+   neo.send(Wire.of("player","neo","*",state).encode());
+   assertTrue(neo.await("error").data().get("message").getAsString().contains("primary"));
+  } finally { for(Client c:clients) c.closeBlocking(); server.stop(); }
+ }
+ /** Two real runtime links: what is sent while the links are down arrives once, in order, after they reconnect. */
+ @Test void reliableMessagesSurviveAReconnectExactlyOnce() throws Exception {
+  Coordinator server=new Coordinator(0,"secret"); server.start();
+  for(int i=0;i<200 && server.getPort()==0;i++) Thread.sleep(10);
+  Path dir=Files.createTempDirectory("mmlf-reliable");
+  Session session=new Session("ws://127.0.0.1:"+server.getPort(),"secret",dir.toString(),"fabric");
+  BlockingQueue<Wire> neoEvents=new LinkedBlockingQueue<>();
+  RuntimeClient fabric=new RuntimeClient(session,"fabric","fabric",true,w->{});
+  RuntimeClient neo=new RuntimeClient(session,"neo","neoforge",false,w->{ if(w.type().equals("event")) neoEvents.add(w); });
+  try {
+   fabric.start(); neo.start();
+   awaitTrue(()->fabric.ready() && neo.ready());
+   fabric.sendReliable("event","neo",new Event("n",Map.of("n","1")));
+   assertEquals("1",neoEvents.poll(5,TimeUnit.SECONDS).body(Event.class).values().get("n"));
+   for(var connection:new ArrayList<>(server.getConnections())) connection.closeConnection(1001,"test disconnect");
+   awaitTrue(()->!fabric.ready() && !neo.ready());
+   fabric.sendReliable("event","neo",new Event("n",Map.of("n","2")));
+   fabric.sendReliable("event","*",new Event("n",Map.of("n","3")));
+   awaitTrue(()->fabric.ready() && neo.ready());
+   fabric.sendReliable("event","neo",new Event("n",Map.of("n","4")));
+   List<String> received=new ArrayList<>();
+   for(int i=0;i<3;i++) { Wire w=neoEvents.poll(5,TimeUnit.SECONDS); assertNotNull(w,"missing message after "+received); received.add(w.body(Event.class).values().get("n")); }
+   assertEquals(List.of("2","3","4"),received);
+   assertNull(neoEvents.poll(1500,TimeUnit.MILLISECONDS),"no duplicate after the reconnect");
+  } finally { fabric.close(); neo.close(); server.stop(); }
+ }
+ static void awaitTrue(java.util.function.BooleanSupplier condition) throws InterruptedException {
+  for(int i=0;i<1000;i++) { if(condition.getAsBoolean()) return; Thread.sleep(10); }
+  throw new AssertionError("condition not reached");
  }
  static final class Client extends WebSocketClient {
   final BlockingQueue<Wire> queue=new LinkedBlockingQueue<>();

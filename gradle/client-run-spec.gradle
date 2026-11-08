@@ -1,0 +1,24 @@
+import groovy.json.JsonOutput
+// Writes build/mmlf/client-run.json: main class, classpath, JVM and program arguments of this project's runClient,
+// so a session host can start this runtime inside its own JVM through the loader's native launch (DevRunSpecs).
+tasks.register('writeClientRunSpec') {
+    def run = tasks.named('runClient', JavaExec)
+    // Whatever runClient needs before it starts (prepared run files, compiled mods) is needed here too.
+    dependsOn { run.get().taskDependencies.getDependencies(run.get()).findAll { !(it.name in ['stageHostMods', 'writeClientRunSpec']) } }
+    def out = layout.buildDirectory.file('mmlf/client-run.json')
+    outputs.file(out)
+    outputs.upToDateWhen { false }
+    doLast {
+        JavaExec t = run.get()
+        def spec = [
+            mainClass : t.mainClass.get(),
+            classpath : t.classpath.files.collect { it.absolutePath },
+            jvmArgs   : t.allJvmArgs.collect { it.toString() },
+            args      : t.args.collect { it.toString() },
+            workingDir: t.workingDir.absolutePath
+        ]
+        def f = out.get().asFile
+        f.parentFile.mkdirs()
+        f.text = JsonOutput.prettyPrint(JsonOutput.toJson(spec))
+    }
+}

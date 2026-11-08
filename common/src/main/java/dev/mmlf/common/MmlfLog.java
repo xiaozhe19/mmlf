@@ -48,11 +48,17 @@ public final class MmlfLog {
   record.put("time",Instant.now().toString()); record.put("level",level.name());record.put("runtime",runtime);
   record.put("module",module);record.put("event",event);record.put("thread",Thread.currentThread().getName());
   Map<String,Object> safe=new LinkedHashMap<>();
-  fields.forEach((key,value)->safe.put(key,key.toLowerCase(Locale.ROOT).matches(".*(token|password|secret|credential|authorization).*" )?"[REDACTED]":value));
+  fields.forEach((key,value)->safe.put(key,key.toLowerCase(Locale.ROOT).matches(".*(token|password|secret|credential|authorization).*" )?"[REDACTED]":finite(value)));
   record.put("fields",safe);
   String line=Wire.JSON.toJson(record);
   if(output!=null) try {output.write(line);output.newLine();output.flush();} catch(IOException e) {System.err.println("MMLF log write failed: "+e.getClass().getSimpleName());}
   System.out.println("[MMLF "+level+" "+runtime+" "+module+"] "+event+" "+Wire.JSON.toJson(safe));
+ }
+ /** JSON has no Infinity or NaN; such a value is logged as text instead of failing the caller, which may be a game tick. */
+ private static Object finite(Object value) {
+  if(value instanceof Double d && !Double.isFinite(d)) return d.toString();
+  if(value instanceof Float f && !Float.isFinite(f)) return f.toString();
+  return value;
  }
  public static synchronized void close() {if(output!=null) try {output.close();} catch(IOException ignored) {} finally {output=null;} }
 }

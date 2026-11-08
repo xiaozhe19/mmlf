@@ -13,8 +13,16 @@ public final class NeoForgeTestMod {
  public static final DeferredBlock<Block> BLOCK=BLOCKS.register("demo_block",DemoBlock::new);
  public static final DeferredBlock<Block> GUI_BLOCK=BLOCKS.register("gui_block",GuiBlock::new);
  public static final DeferredBlock<Block> BOX_BLOCK=BLOCKS.register("box_block",BoxBlock::new);
+ public static final DeferredBlock<Block> SIGNAL_BLOCK=BLOCKS.register("signal_block",CollabBlocks.SignalBlock::new);
+ public static final DeferredBlock<Block> LAMP_BLOCK=BLOCKS.register("lamp_block",CollabBlocks.LampBlock::new);
+ public static final DeferredBlock<Block> PROBE_BLOCK=BLOCKS.register("probe_block",CollabBlocks.ProbeBlock::new);
+ public static final DeferredBlock<Block> CRATE_BLOCK=BLOCKS.register("crate_block",CollabBlocks.CrateBlock::new);
+ public static final DeferredRegister<net.minecraft.world.level.block.entity.BlockEntityType<?>> BLOCK_ENTITIES=DeferredRegister.create(net.minecraft.core.registries.Registries.BLOCK_ENTITY_TYPE,"mmlf_neoforge_test");
+ public static final java.util.function.Supplier<net.minecraft.world.level.block.entity.BlockEntityType<CollabBlocks.CrateBlockEntity>> CRATE_TYPE=
+  BLOCK_ENTITIES.register("crate",()->net.minecraft.world.level.block.entity.BlockEntityType.Builder.of(CollabBlocks.CrateBlockEntity::new,CRATE_BLOCK.get()).build(null));
  public NeoForgeTestMod(IEventBus bus) {
-  BLOCKS.register(bus); ITEMS.register(bus);
+  CollabBlocks.crateType=CRATE_TYPE;
+  BLOCKS.register(bus); ITEMS.register(bus); BLOCK_ENTITIES.register(bus);
   dev.mmlf.common.BridgeEvents.subscribe(event->{
    if(!event.topic().equals("mmlf.toggle")) return;
    var server=net.neoforged.neoforge.server.ServerLifecycleHooks.getCurrentServer(); if(server==null) return;
@@ -33,5 +41,9 @@ public final class NeoForgeTestMod {
   ITEMS.register("demo_block",()->new BlockItem(BLOCK.get(),new Item.Properties()));
   ITEMS.register("gui_block",()->new BlockItem(GUI_BLOCK.get(),new Item.Properties()));
   ITEMS.register("box_block",()->new BlockItem(BOX_BLOCK.get(),new Item.Properties()));
+  ITEMS.register("signal_block",()->new BlockItem(SIGNAL_BLOCK.get(),new Item.Properties()));
+  ITEMS.register("lamp_block",()->new BlockItem(LAMP_BLOCK.get(),new Item.Properties()));
+  ITEMS.register("probe_block",()->new BlockItem(PROBE_BLOCK.get(),new Item.Properties()));
+  ITEMS.register("crate_block",()->new BlockItem(CRATE_BLOCK.get(),new Item.Properties()));
  }
 }

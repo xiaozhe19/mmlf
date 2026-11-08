@@ -6,7 +6,9 @@
 
 # Minecraft 开发运行目录与 MMLF 会话
 **/run/
-runtime/
+# 只忽略会话输出目录，不忽略同名的源码包（launcher/.../runtime）
+/runtime/
+/coordinator/runtime/
 
 # 文档与报告不入库（README 引用的图片除外）
 docs/*
@@ -39,3 +41,8 @@ Thumbs.db
 
 # 第三方 Mod 由 scripts/fetch-demo-mods.ps1 按 manifest 下载校验，不入库
 mmlf/mods/*.jar
+
+# 兼容性测试 Mod 由 scripts/compat 解析、下载、校验，不入库
+mmlf/compat/jars/
+mmlf/compat/stage/
+mmlf/compat/results/

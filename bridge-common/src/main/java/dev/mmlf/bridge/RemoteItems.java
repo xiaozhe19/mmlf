@@ -24,11 +24,10 @@ public final class RemoteItems {
   * Owner: the primary selected another hotbar slot. Only the selection follows; the slot's contents come from the
   * mirrored inventory, so this runtime's hand and the primary's always show the same stack.
   */
- public static void updateHeld(String encoded,String slot) {
+ public static void updateHeld(String encoded,int slot) {
   selectedReference=encoded;
   var mc=Minecraft.getInstance();
-  try {int index=Integer.parseInt(slot);if(mc.player!=null && index>=0 && index<9) mc.player.getInventory().selected=index;}
-  catch(NumberFormatException | NullPointerException ignored) {}
+  if(mc.player!=null && slot>=0 && slot<9) mc.player.getInventory().selected=slot;
  }
  public static boolean nativeHandSelected() {return !primary && RemoteItemRef.parse(selectedReference).map(ref->ref.owner().equals(link.id)).orElse(false);}
 
@@ -42,7 +41,7 @@ public final class RemoteItems {
   String id=BuiltInRegistries.ITEM.getKey(item.getItem()).toString();
   var values=new HashMap<String,String>(Map.of("owner",link.id,"token",token.toString(),"item",id,"name",item.getHoverName().getString(),"display",Wire.JSON.toJson(describe(item,player))));
   String payload=payload(item,player.registryAccess()); if(payload!=null) values.put("payload",payload);
-  link.send("event","*",new Event("mmlf:picked",values));
+  link.sendReliable("event",BridgeCore.primaryId(),new Event("mmlf:picked",values));
   MmlfLog.info("items","native_picked",Map.of("item",id,"position",pos.toShortString(),"reference",token.toString()));
  }
  public static void receive(Wire message) {
