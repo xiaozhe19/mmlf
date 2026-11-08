@@ -1,8 +1,7 @@
 <div align="center">
 
 
-
-# 🧩 MMLF · Multi-ModLoader Fusion
+# <img src="docs/media/mmlf-logo.svg" alt="MMLF logo" width="48" height="48"> MMLF · Multi-ModLoader Fusion
 
 **让 Fabric Mod 和 NeoForge Mod 出现在同一个 Minecraft 画面里 。**
 

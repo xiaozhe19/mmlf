@@ -29,7 +29,11 @@ CANDIDATES = [
     ("worldgen", "terralith", ["fabric", "neoforge"]),
     ("worldgen", "biomes-o-plenty", ["fabric", "neoforge"]),
     ("mobs", "naturalist", ["fabric", "neoforge"]),
+    ("mechanical-animation", "create", ["neoforge"]),
 ]
+
+# Create 6.0.9 matches the documented Iris/Flywheel compatibility addon range. Keep the test reproducible.
+PINNED = {("create", "neoforge"): "n7NADxiG"}
 
 def get(path, **query):
     url = API + path
@@ -90,7 +94,10 @@ def main():
             print(f"{slug}: not found", file=sys.stderr)
             continue
         for loader in loaders:
-            v = newest(slug, loader)
+            pin = PINNED.get((slug, loader))
+            v = get(f"/version/{pin}") if pin else newest(slug, loader)
+            if v is not None and (loader not in v["loaders"] or MC not in v["game_versions"]):
+                raise ValueError(f"{slug} [{loader}]: pinned version does not support Minecraft {MC}")
             base = {"category": category, "project": slug, "title": project["title"], "license": project["license"]["id"],
                     "licenseName": project["license"].get("name"), "clientSide": project["client_side"], "serverSide": project["server_side"],
                     "source": f"https://modrinth.com/mod/{slug}"}

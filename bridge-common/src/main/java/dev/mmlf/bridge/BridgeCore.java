@@ -96,7 +96,7 @@ public final class BridgeCore {
     static boolean ownsVanilla(net.minecraft.core.BlockPos pos) { return ownedVanilla.contains(pos); }
     static java.util.Set<net.minecraft.core.BlockPos> ownedVanilla() { return ownedVanilla; }
     public static boolean renderOwned(net.minecraft.world.level.block.state.BlockState state,net.minecraft.core.BlockPos pos) {
-        return primary || !connected() || !net.minecraft.core.registries.BuiltInRegistries.BLOCK.getKey(state.getBlock()).getNamespace().equals("minecraft") || ownedVanilla.contains(pos);
+        return primary || !connected() || !dev.mmlf.bridge.render.RenderOwnership.filterBlocks() || !net.minecraft.core.registries.BuiltInRegistries.BLOCK.getKey(state.getBlock()).getNamespace().equals("minecraft") || ownedVanilla.contains(pos);
     }
     private static java.nio.ByteBuffer colorBuffer, depthBuffer;
     private BridgeCore() {}
@@ -137,6 +137,7 @@ public final class BridgeCore {
             sessionIdentity=session.identity();
             primary=id.equals(session.primary());
             link=new RuntimeClient(session,id,loader,primary,BridgeCore::receive);
+            MmlfLog.info("render","block_ownership",Map.of("mode",dev.mmlf.bridge.render.RenderOwnership.filterBlocks()?"filtered":"full", "runtime",id));
             BridgeEvents.install((target,event)->link.sendReliable("event",target,event));
             RemoteItems.initialize(link,primary);
             InventoryBridge.initialize(link.id,primary);
@@ -193,6 +194,13 @@ public final class BridgeCore {
             if(!primary && message.source().equals(session.primary())) followPlayer(mc,message.body(PlayerState.class));
         } else if(message.type().equals("event")) {
             Event event=message.body(Event.class);
+            if(event.topic().equals("mmlf:language")) {
+                if(!primary && message.source().equals(session.primary())) mc.execute(()->{
+                    initialLanguageReceived=true;
+                    followLanguage(mc,event.values().get("code"),message.source());
+                });
+                return;
+            }
             if(event.topic().equals("mmlf:latency_feedback")) {
                 if(!primary && message.source().equals(session.primary())) {
                     try { double ms=Double.parseDouble(event.values().get("captureToCompositeMs"));
@@ -235,6 +243,11 @@ public final class BridgeCore {
     private static boolean gamePhaseSent;
     public static void tick(Minecraft mc) {
         if(!gamePhaseSent) { gamePhaseSent=true; phase(dev.mmlf.launcher.runtime.InJvmBackend.PHASE_GAME); }
+        // Send the host language before either side enters a world, so the guest can reload at the title screen.
+        if(primary && link!=null && link.ready() && !remoteWorldReady() && mc.options!=null && System.nanoTime()>=nextLanguageAnnouncement) {
+            nextLanguageAnnouncement=System.nanoTime()+2_000_000_000L;
+            link.sendReliable("event","*",new Event("mmlf:language",Map.of("code",mc.options.languageCode)));
+        }
         // The host may ask for a stop before this runtime has joined its session (still loading, stalled on a screen).
         if(++stopCheckTick%20==0 && RuntimeContext.current().inJvm() && dev.mmlf.common.InJvm.registry().get(dev.mmlf.launcher.runtime.InJvmBackend.stopKey(RuntimeContext.current().loader()))!=null) { stopBackground(mc,"host_stop"); return; }
         if(releaseRuntime!=null) joinRelease(mc);
@@ -373,6 +386,22 @@ public final class BridgeCore {
     }
     public static boolean isPrimary() { return primary; }
     private static boolean languageReloading;
+    private static boolean initialLanguageReceived, initialLanguageWaitReported;
+    private static long initialLanguageWaitStarted, nextLanguageAnnouncement;
+    /** Do not enter the far world in the middle of the first language reload; old peers get a bounded fallback. */
+    static boolean initialLanguageReady() {
+        if(primary || link==null) return true;
+        if(languageBusy()) return false;
+        if(initialLanguageReceived) return true;
+        long now=System.nanoTime();
+        if(initialLanguageWaitStarted==0) initialLanguageWaitStarted=now;
+        if(now-initialLanguageWaitStarted<30_000_000_000L) return false;
+        if(!initialLanguageWaitReported) {
+            initialLanguageWaitReported=true;
+            MmlfLog.warn("connection","initial_language_timeout",Map.of("received",initialLanguageReceived,"busy",languageBusy()));
+        }
+        return true;
+    }
     /** A language that arrived while a world was loading; switching then never finishes (see {@link #followLanguage}). */
     private static String pendingLanguage;
     /** Background: a language switch is running or waiting, so it opens no world until it is done. */
@@ -846,7 +875,9 @@ public final class BridgeCore {
                 layer.composited=layer.repeated=layer.stale=layer.unknownPose=0;
                 layer.metricSince=metricNow;
             }
-            if(!Experiments.GEOMETRY) RemoteCompositor.draw(frame,pixels,current,target.width,target.height);
+            // Captured section meshes do not yet cover Sodium, block entities or animated geometry.
+            // Keep the complete native frame until all content has a safe unified rendering path.
+            RemoteCompositor.draw(frame,pixels,current,target.width,target.height);
             if(!compositeReported) {compositeReported=true;System.out.println("MMLF COMPOSITE READY remote="+frame.runtime()+" mode=gpu");}
         }
     }

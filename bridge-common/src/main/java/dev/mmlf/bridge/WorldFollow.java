@@ -84,7 +84,7 @@ final class WorldFollow {
         }
         if(pending==null) return;
         if(mc.level!=null) { if(!pending.get("save").equals(opened)) close(mc); return; }
-        if(!(mc.screen instanceof TitleScreen) || BridgeCore.languageBusy()) return;
+        if(!(mc.screen instanceof TitleScreen) || !BridgeCore.initialLanguageReady() || BridgeCore.languageBusy()) return;
         Map<String,String> world=pending; pending=null;
         String save=world.get("save");
         opened=save; configured=false;

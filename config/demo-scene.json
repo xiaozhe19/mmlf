@@ -1,6 +1,24 @@
 {
   "placements": [
     {
+      "runtime": "neoforge",
+      "block": "create:creative_motor",
+      "x": 5,
+      "y": 100,
+      "z": 1,
+      "properties": { "facing": "east" },
+      "optional": true
+    },
+    {
+      "runtime": "neoforge",
+      "block": "create:cogwheel",
+      "x": 6,
+      "y": 100,
+      "z": 1,
+      "properties": { "axis": "x" },
+      "optional": true
+    },
+    {
       "runtime": "fabric",
       "block": "mmlf_fabric_test:demo_block",
       "x": -1,

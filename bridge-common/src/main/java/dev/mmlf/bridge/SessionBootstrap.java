@@ -34,7 +34,7 @@ final class SessionBootstrap {
             if(solo()) System.out.println("MMLF: solo baseline (MMLF_SOLO); no other runtime started");
             else if(inJvm) for(String other:others) manager.start(DevRunSpecs.inJvm(host,project,other));
             else manager.start(DevRunSpecs.gradle(host,project,others));
-            System.out.println("MMLF: hosting session as primary "+runtime+" ("+backend+"); started "+others+" in "+host.directory());
+            System.out.println("MMLF: hosting session as primary "+runtime+" ("+backend+"); started "+(solo()?List.of():others)+" in "+host.directory());
             testDeadline(manager);
             return host.sessionFile();
         } catch(Exception e) {

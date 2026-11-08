@@ -15,6 +15,7 @@ import java.util.*;
 public final class DemoScene {
  private static boolean started,prepared,hidden,skipWait;
  private static int testTicks;
+ private static int createFixtureTicks;
  /** The self-test is written for a remote demo block on +x; when this runtime's remote block is on -x, it is mirrored. */
  private static int side=1;
  private static double x(double value) { return side>0?value:1-value; }
@@ -47,6 +48,22 @@ public final class DemoScene {
   if(prepared && !hidden && !BridgeCore.isPrimary() && RuntimeContext.current().hiddenWindow()) {
    org.lwjgl.glfw.GLFW.glfwHideWindow(mc.getWindow().getWindow()); hidden=true;
   }
+  if(prepared && createFixtureTicks<300 && "neoforge".equals(runtime) && mc.getSingleplayerServer()!=null && Files.exists(session.root().resolve("self-test"))
+      && BuiltInRegistries.BLOCK.containsKey(ResourceLocation.parse("create:cogwheel")) && ++createFixtureTicks==300) {
+   var server=mc.getSingleplayerServer();
+   server.execute(()->{
+    try {
+     var level=server.overworld();
+     var motor=level.getBlockEntity(new BlockPos(5,100,1)); var cog=level.getBlockEntity(new BlockPos(6,100,1));
+     if(motor==null || cog==null) throw new IllegalStateException("fixture block entity missing");
+     float motorSpeed=((Number)motor.getClass().getMethod("getSpeed").invoke(motor)).floatValue();
+     float cogSpeed=((Number)cog.getClass().getMethod("getSpeed").invoke(cog)).floatValue();
+     System.out.println("MMLF CREATE SELFTEST motorRpm="+motorSpeed+" cogRpm="+cogSpeed+" passed="+(Float.isFinite(motorSpeed) && Float.isFinite(cogSpeed) && motorSpeed!=0 && cogSpeed!=0));
+    } catch(ReflectiveOperationException | RuntimeException e) {
+     System.out.println("MMLF CREATE SELFTEST reason="+e.getClass().getSimpleName()+" passed=false");
+    }
+   });
+  }
   mc.options.pauseOnLostFocus=false;
   // thin_world: a void world has nothing to stand on, and the player falls out of it before the primary's pose arrives.
   if(Experiments.THIN_WORLD && !BridgeCore.isPrimary() && mc.getSingleplayerServer()!=null) {
@@ -61,6 +78,7 @@ public final class DemoScene {
    return;
   }
   if(!started && mc.screen instanceof WaitingScreen) mc.setScreen(new net.minecraft.client.gui.screens.TitleScreen());
+  if(!started && !BridgeCore.isPrimary() && mc.screen instanceof net.minecraft.client.gui.screens.TitleScreen && !BridgeCore.initialLanguageReady()) return;
   if(!started && mc.level==null && mc.screen instanceof net.minecraft.client.gui.screens.TitleScreen) {
    started=true;
    var settings=new LevelSettings("MMLF Demo",GameType.CREATIVE,false,Difficulty.PEACEFUL,true,new GameRules(),WorldDataConfiguration.DEFAULT);

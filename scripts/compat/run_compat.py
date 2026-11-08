@@ -46,6 +46,7 @@ def parse(console, session):
     text = console.read_text(encoding="utf-8", errors="replace")
     result = {
         "bridgesInitialized": sorted(set(re.findall(r"MMLF bridge initialized: (\w+)", text))),
+        "sceneReady": sorted(set(re.findall(r"MMLF SCENE READY runtime=(\w+)", text))),
         "selfTests": [{"line": m.group(0).strip(), "passed": m.group(1) == "true"} for m in re.finditer(r"MMLF [A-Z ]+SELFTEST.*?passed=(true|false).*", text)],
         "compositeReady": "MMLF COMPOSITE READY" in text,
         "crashMarkers": sorted(set(re.findall(r"(Mixin apply failed|Mod resolution failed|Incompatible mods found|LoadingErrorScreen|---- Minecraft Crash Report ----|java\.lang\.\w*(?:Error|Exception)[^\n]{0,160})", text)))[:40],
@@ -61,10 +62,19 @@ def parse(console, session):
             logs[jsonl.stem] = events
         result["worldReady"] = sorted({e["fields"].get("runtime") for evs in logs.values() for e in evs if e.get("event") == "runtime_world_ready"} - {None})
         result["phases"] = [(e["fields"]["runtimeId"], e["fields"]["phase"]) for evs in logs.values() for e in evs if e.get("event") == "injvm_phase"]
+        result["meshHookEvidence"] = [{"runtime": e.get("runtime"), **e.get("fields", {})}
+                                      for evs in logs.values() for e in evs
+                                      if e.get("event") == "mesh_hook_observed"]
         result["metrics"] = {name: [e["fields"] for e in evs if e.get("module") == "metrics"][-3:] for name, evs in logs.items()}
         result["crashReports"] = [str(p.relative_to(session)) for p in session.rglob("crash-reports/*.txt")]
         result["remoteError"] = (session / "remote-error.txt").read_text(encoding="utf-8") if (session / "remote-error.txt").exists() else None
     return result
+
+def launch_compatible(code, expected, parsed, solo=False):
+    """L1 requires evidence that every expected runtime initialized and entered a world."""
+    ready = parsed.get("sceneReady", []) if solo else parsed.get("worldReady", [])
+    return (code == 0 and set(expected) <= set(parsed["bridgesInitialized"])
+            and not parsed.get("crashReports") and set(expected) <= set(ready))
 
 def main():
     ap = argparse.ArgumentParser()
@@ -102,15 +112,19 @@ def main():
     latest = ROOT / "runtime" / "latest-session.txt"
     session = Path(latest.read_text(encoding="utf-8").strip()) if latest.exists() and latest.stat().st_mtime >= started else None
     parsed = parse(console, session)
+    parsed["selfTestSummary"] = {"observed": len(parsed["selfTests"]),
+                                 "failed": sum(not t["passed"] for t in parsed["selfTests"]),
+                                 "complete": "MMLF COLLAB SELFTEST complete" in console.read_text(encoding="utf-8", errors="replace")}
     expected = [args.primary] if args.solo else ["fabric", "neoforge"]
-    l1 = (code == 0 and set(expected) <= set(parsed["bridgesInitialized"]) and not parsed.get("crashReports")
-          and (args.solo or set(expected) - {args.primary} <= set(parsed.get("worldReady", []))))
+    l1 = launch_compatible(code, expected, parsed, args.solo)
     result = {"profile": args.profile, "primary": args.primary, "solo": args.solo, "backend": args.backend, "exitCode": code,
               "durationSeconds": round(time.time() - started), "mods": [p.name for p in jars], "session": str(session) if session else None,
               "L1": l1, "levelNote": "L1 由日志自动判定；L2–L4 需人工或专用探针，未在此设置", **parsed}
     (out / "result.json").write_text(json.dumps(result, indent=2, ensure_ascii=False), encoding="utf-8")
     print(json.dumps({k: result[k] for k in ("profile", "primary", "solo", "exitCode", "L1")}, ensure_ascii=False))
     print(f"result: {out / 'result.json'}")
+    if not l1:
+        sys.exit(code if code != 0 else 1)
 
 if __name__ == "__main__":
     main()

@@ -743,6 +743,29 @@
       "datePublished": "2026-10-21T19:27:52.034627Z",
       "status": "resolved",
       "dependencies": []
+    },
+    {
+      "category": "mechanical-animation",
+      "project": "create",
+      "title": "Create",
+      "license": "LicenseRef-Create-Mod-License",
+      "licenseName": "",
+      "clientSide": "optional",
+      "serverSide": "required",
+      "source": "https://modrinth.com/mod/create",
+      "versionId": "n7NADxiG",
+      "versionNumber": "mc1.21.1-6.0.9",
+      "versionType": "release",
+      "loader": "neoforge",
+      "gameVersions": [
+        "1.21.1"
+      ],
+      "file": "create-1.21.1-6.0.9.jar",
+      "url": "https://cdn.modrinth.com/data/LNytGWDc/versions/n7NADxiG/create-1.21.1-6.0.9.jar",
+      "sha512": "8b3b3d9b6874f31a538add81390dff26b5f9475da6349dc52fc20dbde802edfc32ead511e12291198591574d42605f916f1acbadc2437056eea615d8586bf7cf",
+      "datePublished": "2026-01-02T16:55:33.705214Z",
+      "status": "resolved",
+      "dependencies": []
     }
   ]
 }

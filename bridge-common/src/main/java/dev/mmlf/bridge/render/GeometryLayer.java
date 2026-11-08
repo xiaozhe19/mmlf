@@ -24,7 +24,8 @@ import java.util.concurrent.ConcurrentHashMap;
  * Geometry-layer prototype (split-runtime manual §6.2, step 1, experiment {@code geometry}).
  * A background keeps a copy of every chunk-section mesh it compiles (already limited to blocks it owns) and publishes
  * them with its block atlas; the primary uploads them and draws them inside its own section layers, binding the
- * background's atlas so the UVs need no remapping. The primary's pixel composite of the world layer is then skipped.
+ * background's atlas so the UVs need no remapping. Research capture is retained, but partial geometry is not drawn
+ * or used as a replacement for the complete remote frame until it covers all required render paths.
  */
 public final class GeometryLayer {
  private GeometryLayer() {}

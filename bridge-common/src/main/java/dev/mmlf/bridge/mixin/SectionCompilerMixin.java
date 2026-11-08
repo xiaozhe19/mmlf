@@ -21,7 +21,10 @@ public abstract class SectionCompilerMixin {
  @WrapOperation(method="compile*",at=@At(value="INVOKE",target="Lnet/minecraft/world/level/block/state/BlockState;getRenderShape()Lnet/minecraft/world/level/block/RenderShape;"))
  private RenderShape mmlf$owned(BlockState state,Operation<RenderShape> original,@Local(ordinal=2) BlockPos pos) {
   RenderShape shape=original.call(state);
-  return shape==RenderShape.MODEL && !BridgeCore.renderOwned(state,pos) ? RenderShape.INVISIBLE : shape;
+  if(shape!=RenderShape.MODEL) return shape;
+  boolean accepted=BridgeCore.renderOwned(state,pos);
+  dev.mmlf.bridge.render.RenderPathEvidence.observed(false,accepted);
+  return accepted ? shape : RenderShape.INVISIBLE;
  }
  /** Experiment {@code geometry}: a background keeps a copy of each compiled section for the primary to draw. */
  @Inject(method="compile*",at=@At("RETURN"),require=0)

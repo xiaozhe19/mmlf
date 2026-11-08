@@ -18,6 +18,10 @@ public final class RenderOwnership {
     private RenderOwnership() {}
     public enum Part { SKY, WEATHER }
     private static final String MODE=System.getProperty("mmlf.renderOwnership",System.getenv().getOrDefault("MMLF_RENDER_OWNERSHIP","off")).toLowerCase(Locale.ROOT);
+    /** Diagnostic fallback: keep the far runtime's block meshes intact instead of applying owner filtering. */
+    private static final boolean FILTER_BLOCKS=!System.getProperty("mmlf.blockOwnership",
+        System.getenv().getOrDefault("MMLF_BLOCK_OWNERSHIP","filtered")).equalsIgnoreCase("full");
+    public static boolean filterBlocks() { return FILTER_BLOCKS; }
     /** Classes whose drawing a part relies on: a foreign mixin into any of them keeps the part drawn. */
     private static final Map<Part,List<Class<?>>> DRAWN_BY=Map.of(
         Part.SKY,List.of(net.minecraft.client.renderer.LevelRenderer.class,net.minecraft.client.renderer.DimensionSpecialEffects.class),

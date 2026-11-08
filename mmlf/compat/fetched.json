@@ -118,12 +118,15 @@
       "neoforge": null,
       "minecraft": "[1.21,1.21.1)"
     },
-    "status": "fetched",
+    "status": "incompatible_with_dev_environment",
+    "reason": "minecraft [1.21,1.21.1)，项目为 1.21.1",
     "closure": [
       "mmlf/compat/jars/neoforge/iris-neoforge-1.8.14-beta.1+mc1.21.1.jar",
       "mmlf/compat/jars/neoforge/sodium-neoforge-0.8.13+mc1.21.1.jar"
     ],
-    "blockedBy": []
+    "blockedBy": [
+      "iris: incompatible_with_dev_environment minecraft [1.21,1.21.1)，项目为 1.21.1"
+    ]
   },
   {
     "project": "sodium",
@@ -601,6 +604,25 @@
     "status": "fetched",
     "closure": [
       "mmlf/compat/jars/neoforge/naturalist-2.0.7-neoforge-1.21.1.jar"
+    ],
+    "blockedBy": []
+  },
+  {
+    "project": "create",
+    "loader": "neoforge",
+    "version": "mc1.21.1-6.0.9",
+    "file": "mmlf/compat/jars/neoforge/create-1.21.1-6.0.9.jar",
+    "sha512": "8b3b3d9b6874f31a538add81390dff26b5f9475da6349dc52fc20dbde802edfc32ead511e12291198591574d42605f916f1acbadc2437056eea615d8586bf7cf",
+    "license": "LicenseRef-Create-Mod-License",
+    "dependencyOf": false,
+    "declares": {
+      "modId": "create",
+      "neoforge": "[21.1.206,)",
+      "minecraft": "[1.21.1]"
+    },
+    "status": "fetched",
+    "closure": [
+      "mmlf/compat/jars/neoforge/create-1.21.1-6.0.9.jar"
     ],
     "blockedBy": []
   }

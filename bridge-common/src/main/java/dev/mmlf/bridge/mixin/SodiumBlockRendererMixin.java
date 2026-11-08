@@ -19,6 +19,8 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 public abstract class SodiumBlockRendererMixin {
  @Inject(method="renderModel",at=@At("HEAD"),cancellable=true,require=0,remap=false)
  private void mmlf$owned(BakedModel model,BlockState state,BlockPos pos,BlockPos origin,CallbackInfo ci) {
-  if(!BridgeCore.renderOwned(state,pos)) ci.cancel();
+  boolean accepted=BridgeCore.renderOwned(state,pos);
+  dev.mmlf.bridge.render.RenderPathEvidence.observed(true,accepted);
+  if(!accepted) ci.cancel();
  }
 }

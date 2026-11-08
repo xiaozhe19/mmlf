@@ -86,14 +86,27 @@ def numbers(version):
     return [int(x) for x in re.findall(r"\d+", version.split("+")[0])[:4]]
 
 def satisfied(requirement, have):
-    """Fabric-style '>=x' / '*' requirements against the project's version; None when the form is not understood."""
+    """Check supported Fabric predicates and Maven intervals; None means the requirement is unknown."""
     if requirement is None or requirement == "*":
         return True
     if isinstance(requirement, list):
-        return any(satisfied(r, have) for r in requirement)
+        results = [satisfied(r, have) for r in requirement]
+        return True if True in results else (None if None in results else False)
+    exact = re.fullmatch(r"\s*\[\s*([0-9.]+)\s*\]\s*", requirement)
+    if exact:
+        return (numbers(have) + [0] * 4)[:4] == (numbers(exact.group(1)) + [0] * 4)[:4]
+    m = re.fullmatch(r"\s*([\[(])\s*([0-9.]+)?\s*,\s*([0-9.]+)?\s*([\])])\s*", requirement)
+    if m:
+        value = tuple((numbers(have) + [0] * 4)[:4])
+        lower = tuple((numbers(m.group(2)) + [0] * 4)[:4]) if m.group(2) else None
+        upper = tuple((numbers(m.group(3)) + [0] * 4)[:4]) if m.group(3) else None
+        return ((lower is None or (value >= lower if m.group(1) == "[" else value > lower)) and
+                (upper is None or (value <= upper if m.group(4) == "]" else value < upper)))
     m = re.fullmatch(r"\s*>=\s*([0-9][0-9A-Za-z.+-]*)\s*", requirement)
     if m:
-        return numbers(have) >= numbers(m.group(1))
+        return (numbers(have) + [0] * 4)[:4] >= (numbers(m.group(1)) + [0] * 4)[:4]
+    if re.fullmatch(r"[0-9]+(?:\.[0-9]+)*", requirement):
+        return (numbers(have) + [0] * 4)[:4] == (numbers(requirement) + [0] * 4)[:4]
     return None
 
 def check(record, props):
@@ -104,6 +117,10 @@ def check(record, props):
             ok = satisfied(d.get(key), have or "0")
             if ok is False:
                 problems.append(f"{key} {d.get(key)}，项目为 {have}")
+    for key, have in (("minecraft", props.get("minecraft_version")),
+                      ("neoforge", props.get("neoforge_version") if record["loader"] == "neoforge" else None)):
+        if have and satisfied(d.get(key), have) is False:
+            problems.append(f"{key} {d.get(key)}，项目为 {have}")
     if problems:
         record["status"] = "incompatible_with_dev_environment"
         record["reason"] = "；".join(problems)
