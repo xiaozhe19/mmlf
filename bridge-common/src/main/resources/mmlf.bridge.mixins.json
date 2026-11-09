@@ -7,11 +7,15 @@
     "CameraMixin",
     "BackgroundMusicMixin",
     "GameRendererMixin",
+    "ItemInHandRendererMixin",
     "BlockRenderDispatcherMixin",
     "MinecraftMixin",
     "RenderSystemMixin",
     "GuiItemMixin",
     "SectionCompilerMixin",
+    "ClientLevelMixin",
+    "TextureAtlasMixin",
+    "SingleFileMixin",
     "LevelRendererMixin",
     "HitOutlineMixin",
     "WindowMixin",
@@ -27,7 +31,20 @@
     "FollowedGroundMixin",
     "GuiMixin",
     "InJvmExitMixin",
-    "SodiumBlockRendererMixin"
+    "SodiumBlockRendererMixin",
+    "EntityRenderDispatcherMixin",
+    "BlockEntityRenderDispatcherMixin",
+    "ParticleEngineMixin",
+    "OptionsMixin",
+    "TextureManagerAccessor",
+    "RenderStateShardAccessor",
+    "TextureAtlasAccessor",
+    "ParticleEngineAccessor",
+    "ItemRendererMixin",
+    "BlockModelShaperMixin",
+    "SodiumTerrainMeshingMixin",
+    "SodiumTerrainUploadMixin",
+    "TerrainRebuildTaskMixin"
   ],
   "injectors": {
     "defaultRequire": 1
@@ -44,6 +61,10 @@
     "ContainerMenuMixin",
     "SlotMixin",
     "ItemPickupMixin",
-    "ItemTooltipMixin"
+    "ItemTooltipMixin",
+    "ServerLevelClockMixin",
+    "ItemEntityAccessor",
+    "FollowerMovementMixin",
+    "ServerConnectionAccessor"
   ]
 }

@@ -15,11 +15,16 @@ import net.neoforged.neoforge.registries.DeferredRegister;
 @Mod(value = "mmlf_bridge", dist = Dist.CLIENT)
 public final class NeoForgeBridge {
     private static final DeferredRegister<CreativeModeTab> TABS=DeferredRegister.create(Registries.CREATIVE_MODE_TAB,"mmlf_bridge");
+    private static final DeferredRegister.Blocks BLOCKS=DeferredRegister.createBlocks("mmlf_bridge");
+    private static final net.neoforged.neoforge.registries.DeferredBlock<dev.mmlf.bridge.StandInBlock> STAND_IN=BLOCKS.register("stand_in",dev.mmlf.bridge.StandInBlock::new);
     public NeoForgeBridge(IEventBus modBus) {
         BridgeCore.initialize("neoforge");
+        dev.mmlf.bridge.render.TerrainModels.install(new NeoForgeTerrainModel());
         dev.mmlf.bridge.ItemAccess.install(new NeoForgeItems());
         for(int i=0;i<RemoteCatalog.POOL;i++) { int index=i; TABS.register(RemoteCatalog.poolKey(i).getPath(),()->RemoteCatalog.buildPool(index,CreativeModeTab.builder())); }
         TABS.register(modBus);
+        BLOCKS.register(modBus);
+        modBus.addListener((net.neoforged.fml.event.lifecycle.FMLCommonSetupEvent e)->dev.mmlf.bridge.StandInBlock.installed(STAND_IN.get()));
         NeoForge.EVENT_BUS.register(this);
     }
     @SubscribeEvent public void onTick(ClientTickEvent.Post event) { BridgeCore.tick(Minecraft.getInstance()); }

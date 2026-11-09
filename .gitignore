@@ -46,3 +46,16 @@ mmlf/mods/*.jar
 mmlf/compat/jars/
 mmlf/compat/stage/
 mmlf/compat/results/
+
+# 本地代码索引、运行时提取的原生库与截图
+/.codegraph/
+/natives-far/
+/natives-near/
+/c80ac039-b139-4817-8966-647fb5d7c743.png
+
+# Python 缓存
+__pycache__/
+*.py[cod]
+
+# 脚本不加入最小源码包；已跟踪的文件需另行从索引移除
+/scripts/

@@ -41,6 +41,7 @@ final class RemoteCompositor {
         uniform mat4 remoteInverse;    // remote clip -> camera-relative world
         uniform int identity;
         uniform int diagnostic;
+        uniform int unifiedPreview;
         uniform float nearPlane;
         uniform float farPlane;
         in vec2 uv;
@@ -68,6 +69,23 @@ final class RemoteCompositor {
             return n.z * 0.5 + 0.5 >= d;
         }
         void main() {
+            if (unifiedPreview == 1) {
+                // Map the current view ray into the scene renderer's projection; this is a preview, not lockstep.
+                vec4 rayPoint = currentInverse * vec4(uv * 2.0 - 1.0, 1.0, 1.0);
+                vec3 direction = normalize(rayPoint.xyz / rayPoint.w);
+                vec4 projected = remoteViewProj * vec4(direction * 4096.0, 1.0);
+                if (projected.w <= 1e-4) discard;
+                vec2 at = projected.xy / projected.w * 0.5 + 0.5;
+                if (any(lessThan(at, vec2(0.0))) || any(greaterThan(at, vec2(1.0)))) discard;
+                float depth = texture(remoteDepth, at).r;
+                color = vec4(texture(remoteColor, at).rgb, 1.0);
+                if (depth >= 1.0) { gl_FragDepth = 1.0; return; }
+                vec4 surface = remoteInverse * vec4(at * 2.0 - 1.0, depth * 2.0 - 1.0, 1.0);
+                if (abs(surface.w) < 1e-6) { gl_FragDepth = 1.0; return; }
+                vec4 target = currentViewProj * vec4(surface.xyz / surface.w, 1.0);
+                gl_FragDepth = target.w > 1e-6 ? clamp(target.z / target.w * 0.5 + 0.5, 0.0, 1.0) : 1.0;
+                return;
+            }
             if (identity == 1) {
                 float d = texture(remoteDepth, uv).r;
                 if (d >= 1.0) { rejectPixel(2); return; }
@@ -130,7 +148,7 @@ final class RemoteCompositor {
         }
         """;
     private static int program, vao, colorTexture, depthTexture, textureWidth, textureHeight;
-    private static int uCurrentInverse, uCurrentViewProj, uRemoteViewProj, uRemoteInverse, uIdentity, uNear, uFar, uDiagnostic;
+    private static int uCurrentInverse, uCurrentViewProj, uRemoteViewProj, uRemoteInverse, uIdentity, uNear, uFar, uDiagnostic,uUnifiedPreview;
     private static boolean failed, readyLogged;
     private static long uploadedFrame=-1, directFrames, reprojectedFrames, countedSince;
     private static String uploadedRuntime;
@@ -139,7 +157,7 @@ final class RemoteCompositor {
     private RemoteCompositor() {}
 
     /** Uploads the frame if it is new, then draws it. Must run with the main target bound, after the world pass. */
-    static void draw(Frame frame,FrameFile.Pixels pixels,Camera camera,int targetWidth,int targetHeight) {
+    static void draw(Frame frame,FrameFile.Pixels pixels,Camera camera,int targetWidth,int targetHeight,boolean unifiedPreview) {
         if(failed || !ensureProgram()) return;
         upload(frame,pixels);
         Pose source=frame.pose();
@@ -160,7 +178,7 @@ final class RemoteCompositor {
         GlStateManager._activeTexture(GL13.GL_TEXTURE1); int previous1=GL11.glGetInteger(GL11.GL_TEXTURE_BINDING_2D);
         try {
             GlStateManager._viewport(0,0,targetWidth,targetHeight);
-            GlStateManager._enableDepthTest(); GlStateManager._depthFunc(GL11.GL_LESS); GlStateManager._depthMask(true);
+            GlStateManager._enableDepthTest(); GlStateManager._depthFunc(unifiedPreview?GL11.GL_ALWAYS:GL11.GL_LESS); GlStateManager._depthMask(true);
             GlStateManager._disableBlend(); GlStateManager._disableCull(); GlStateManager._disableScissorTest();
             GlStateManager._colorMask(true,true,true,true);
             GlStateManager._glUseProgram(program);
@@ -173,6 +191,7 @@ final class RemoteCompositor {
             GL20.glUniformMatrix4fv(uRemoteInverse,false,new Matrix4f(remoteViewProj).invert().get(matrix));
             GL20.glUniform1i(uIdentity,identity?1:0);
             GL20.glUniform1i(uDiagnostic,Boolean.getBoolean("mmlf.reprojectionDiagnostic")?1:0);
+            GL20.glUniform1i(uUnifiedPreview,unifiedPreview?1:0);
             GL20.glUniform1f(uNear,0.05f);
             GL20.glUniform1f(uFar,Math.max(16f,farPlane(projection)));
             GL11.glDrawArrays(GL11.GL_TRIANGLES,0,3);
@@ -241,6 +260,7 @@ final class RemoteCompositor {
             uCurrentInverse=GL20.glGetUniformLocation(p,"currentInverse"); uCurrentViewProj=GL20.glGetUniformLocation(p,"currentViewProj");
             uRemoteViewProj=GL20.glGetUniformLocation(p,"remoteViewProj"); uRemoteInverse=GL20.glGetUniformLocation(p,"remoteInverse");
             uDiagnostic=GL20.glGetUniformLocation(p,"diagnostic");
+            uUnifiedPreview=GL20.glGetUniformLocation(p,"unifiedPreview");
             uIdentity=GL20.glGetUniformLocation(p,"identity"); uNear=GL20.glGetUniformLocation(p,"nearPlane"); uFar=GL20.glGetUniformLocation(p,"farPlane");
             vao=GL30.glGenVertexArrays();
             colorTexture=texture(); depthTexture=texture();

@@ -46,6 +46,7 @@ public final class BridgeCore {
     private static final java.util.Set<String> peers = new java.util.HashSet<>();
     private static long metricAt, metricFrames, previousCpu;
     private static boolean compositeReported;
+    private static boolean unifiedPreviewReported;
     private static final java.util.Set<net.minecraft.core.BlockPos> ownedVanilla=java.util.concurrent.ConcurrentHashMap.newKeySet();
     private static long lastAttack;
     private static long lastResize,lastLinked;
@@ -98,6 +99,20 @@ public final class BridgeCore {
     public static boolean renderOwned(net.minecraft.world.level.block.state.BlockState state,net.minecraft.core.BlockPos pos) {
         return primary || !connected() || !dev.mmlf.bridge.render.RenderOwnership.filterBlocks() || !net.minecraft.core.registries.BuiltInRegistries.BLOCK.getKey(state.getBlock()).getNamespace().equals("minecraft") || ownedVanilla.contains(pos);
     }
+    /**
+     * The owner rule for chunk-section meshers. While the render host draws this runtime's submitted sections, native
+     * section meshes keep no static blocks at all; only the submission compiler keeps the owned ones.
+     */
+    public static boolean renderOwnedInSection(net.minecraft.world.level.block.state.BlockState state,net.minecraft.core.BlockPos pos) {
+        if(dev.mmlf.bridge.render.OwnedSectionCompiler.hideNative() && !dev.mmlf.bridge.render.OwnedSectionCompiler.ownCompile()) return false;
+        return renderOwned(state,pos);
+    }
+    /** The same rule for fluids in section meshes: vanilla fluids belong to the primary unless placed here. */
+    public static boolean renderOwnedFluidInSection(net.minecraft.world.level.material.FluidState fluid,net.minecraft.core.BlockPos pos) {
+        if(dev.mmlf.bridge.render.OwnedSectionCompiler.hideNative() && !dev.mmlf.bridge.render.OwnedSectionCompiler.ownCompile()) return false;
+        return primary || !connected() || !dev.mmlf.bridge.render.RenderOwnership.filterBlocks() || !net.minecraft.core.registries.BuiltInRegistries.FLUID.getKey(fluid.getType()).getNamespace().equals("minecraft") || ownedVanilla.contains(pos);
+    }
+    public static java.util.Set<net.minecraft.core.BlockPos> ownedVanillaPositions() { return java.util.Collections.unmodifiableSet(ownedVanilla); }
     private static java.nio.ByteBuffer colorBuffer, depthBuffer;
     private BridgeCore() {}
     public static void initialize(String loader) {
@@ -161,16 +176,16 @@ public final class BridgeCore {
     }
     private static void receive(Wire message) {
         Minecraft mc=Minecraft.getInstance();
-        if(message.type().equals("object")) {ObjectState object=message.body(ObjectState.class); if(link!=null && !object.owner().equals(link.id)) Boundary.remoteChanged(object); updateCollision(object);
+        if(message.type().equals("object")) {ObjectState object=message.body(ObjectState.class); if(link!=null && !object.owner().equals(link.id)) { Boundary.remoteChanged(object); Occupancy.receive(object); } updateCollision(object);
         } else if(message.type().equals("welcome")) {
             Welcome welcome=message.body(Welcome.class); mc.execute(()->{peers.clear(); peers.addAll(welcome.runtimes()); var server=mc.getSingleplayerServer(); if(server!=null) server.execute(Boundary::republish);});
             RedstoneBridge.runtimeJoined();
         } else if(message.type().equals("runtime_joined")) {
             String id=message.data().get("runtime").getAsString(); mc.execute(()->peers.add(id)); RedstoneBridge.runtimeJoined();
         } else if(message.type().equals("runtime_left")) {
-            String id=message.data().get("runtime").getAsString(); readyRuntimes.remove(id); if(id.equals(session.primary())) playerVersion=0; Boundary.forgetRemote(id); RedstoneBridge.runtimeLeft(id); mc.execute(()->{peers.remove(id); GuiClient.runtimeLeft(id); RemoteCatalog.forget(id); if(id.equals(session.primary())) GuiHost.primaryLost("primary_left"); RemoteLayer removed=remoteLayers.remove(id); if(removed!=null) removed.close(); collisions.values().removeIf(v->v.owner().equals(id)); if(id.equals(session.primary())) { lastRemotePose=null; poseSequence=0; poseSourceNanos=0; yawRate=pitchRate=0; predictionLead.reset(); adaptiveOverscan.reset(); }});
+            String id=message.data().get("runtime").getAsString(); readyRuntimes.remove(id); if(id.equals(session.primary())) playerVersion=0; Boundary.forgetRemote(id); Occupancy.forget(id); RedstoneBridge.runtimeLeft(id); mc.execute(()->{peers.remove(id); GuiClient.runtimeLeft(id); RemoteCatalog.forget(id); if(id.equals(session.primary())) GuiHost.primaryLost("primary_left"); RemoteLayer removed=remoteLayers.remove(id); if(removed!=null) removed.close(); collisions.values().removeIf(v->v.owner().equals(id)); if(id.equals(session.primary())) { lastRemotePose=null; poseSequence=0; poseSourceNanos=0; yawRate=pitchRate=0; predictionLead.reset(); adaptiveOverscan.reset(); }});
         } else if(message.type().equals("disconnected")) {
-            worldReadySent=false; readyRuntimes.clear(); playerVersion=0; Boundary.forgetAllRemote(); RedstoneBridge.disconnected();
+            worldReadySent=false; readyRuntimes.clear(); playerVersion=0; Boundary.forgetAllRemote(); Occupancy.forget(null); RedstoneBridge.disconnected();
             mc.execute(()->{GuiClient.disconnected(); GuiHost.primaryLost("disconnected");peers.clear(); collisions.clear(); remoteLayers.values().forEach(RemoteLayer::close); remoteLayers.clear(); displayFrame=null; displayPixels=null; lastRemotePose=null; poseSequence=0; poseSourceNanos=0; yawRate=pitchRate=0; predictionLead.reset(); adaptiveOverscan.reset();});
         } else if(message.type().equals("ray_request")) {
             RayRequest request=message.body(RayRequest.class); mc.execute(()->raycast(request));
@@ -194,6 +209,22 @@ public final class BridgeCore {
             if(!primary && message.source().equals(session.primary())) followPlayer(mc,message.body(PlayerState.class));
         } else if(message.type().equals("event")) {
             Event event=message.body(Event.class);
+            if(event.topic().equals("mmlf:render_shader_capability")) {
+                dev.mmlf.bridge.render.RenderShaderCapabilities.receive(message.source(),event.values());
+                return;
+            }
+            if(event.topic().equals("mmlf:world_clock") || event.topic().equals("mmlf:world_time") || event.topic().equals("mmlf:world_weather")) {
+                WorldClock.receive(message.source(),event.topic(),event.values());
+                return;
+            }
+            if(event.topic().equals("mmlf:geometry_consumed")) {
+                dev.mmlf.bridge.render.GeometryLayer.receiveConsumed(message.source(),event.values());
+                return;
+            }
+            if(event.topic().equals("mmlf:render_replay_ready")) {
+                if(primary) dev.mmlf.bridge.render.GeometryLayer.receiveReplaySignal(message.source(),event.values().get("dimension"));
+                return;
+            }
             if(event.topic().equals("mmlf:language")) {
                 if(!primary && message.source().equals(session.primary())) mc.execute(()->{
                     initialLanguageReceived=true;
@@ -251,6 +282,7 @@ public final class BridgeCore {
         // The host may ask for a stop before this runtime has joined its session (still loading, stalled on a screen).
         if(++stopCheckTick%20==0 && RuntimeContext.current().inJvm() && dev.mmlf.common.InJvm.registry().get(dev.mmlf.launcher.runtime.InJvmBackend.stopKey(RuntimeContext.current().loader()))!=null) { stopBackground(mc,"host_stop"); return; }
         if(releaseRuntime!=null) joinRelease(mc);
+        WorldClock.tick(mc);
         if(Experiments.GEOMETRY) dev.mmlf.bridge.render.GeometryLayer.tick(mc);
         if(link!=null && primary && !SessionStatus.failed() && ++remoteErrorTick%20==0) {
             Path error=session.root().resolve("remote-error.txt");
@@ -385,6 +417,12 @@ public final class BridgeCore {
             }
     }
     public static boolean isPrimary() { return primary; }
+    /** A connected background, whose player's position comes from the primary. */
+    public static boolean followsPrimary() { return !primary && connected(); }
+    /** Primary: the sequence of the newest camera pose it published. */
+    public static long publishedPoseSequence() { return primary ? sequence : 0; }
+    /** Background: the sequence of the newest primary pose it received. */
+    public static long receivedPoseSequence() { return primary ? 0 : poseSequence; }
     private static boolean languageReloading;
     private static boolean initialLanguageReceived, initialLanguageWaitReported;
     private static long initialLanguageWaitStarted, nextLanguageAnnouncement;
@@ -743,7 +781,20 @@ public final class BridgeCore {
             server.execute(()->{
                 if(server.getPlayerList().getPlayers().isEmpty()) return;
                 var level=server.getPlayerList().getPlayers().getFirst().serverLevel(); var after=level.getBlockState(check.pos());
-                if(!after.equals(check.before())) { ownVanilla(level,check.pos()); MmlfLog.info("items","native_placement",Map.of("actionId",check.actionId(),"position",check.pos().toShortString(),"state",after.toString())); }
+                if(!after.equals(check.before())) { ownVanilla(level,check.pos()); MmlfLog.info("items","native_placement",Map.of("actionId",check.actionId(),"position",check.pos().toShortString(),"state",after.toString())); return; }
+                // Unchanged on the server although the client may have predicted a placement: record what the server saw.
+                var player=server.getPlayerList().getPlayers().getFirst();
+                var chunk=level.getChunkAt(check.pos());
+                var raw=chunk.getSection(chunk.getSectionIndex(check.pos().getY())).getBlockState(check.pos().getX()&15,check.pos().getY()&15,check.pos().getZ()&15);
+                var box=new net.minecraft.world.phys.AABB(check.pos()).expandTowards(0,1,0);
+                var details=new java.util.LinkedHashMap<String,Object>();
+                details.put("actionId",check.actionId()); details.put("position",check.pos().toShortString()); details.put("read",after.toString()); details.put("raw",raw.toString());
+                details.put("mirrored",NeighborMirror.mirrored(level,check.pos())); details.put("mirroredAbove",NeighborMirror.mirrored(level,check.pos().above()));
+                details.put("serverPlayer",player.blockPosition().toShortString()); details.put("serverDistance",Math.sqrt(player.distanceToSqr(net.minecraft.world.phys.Vec3.atCenterOf(check.pos()))));
+                details.put("clientPlayer",mc.player==null?"none":mc.player.blockPosition().toShortString());
+                details.put("awaitingTeleport",((dev.mmlf.bridge.mixin.ServerConnectionAccessor)player.connection).mmlf$awaitingPosition()!=null);
+                details.put("serverHeld",player.getMainHandItem().toString()); details.put("entitiesInPlace",level.getEntities((net.minecraft.world.entity.Entity)null,box).stream().map(e->e.getType().toShortString()).toList());
+                MmlfLog.info("items","native_placement_absent",details);
             });
         }
     }
@@ -822,6 +873,11 @@ public final class BridgeCore {
             FrameExporter.capture(target,rendered,frames,link.id,sessionIdentity,poseSequence,link.calibration());
         } catch(Exception e) { MmlfLog.sampled("render.capture","failed",1000,Map.of("exception",e.toString())); }
     }
+    /** A background frame without a world pass: still publishes readbacks that completed since its last world frame. */
+    public static void drainExportedFrames() {
+        if(primary || frames==null || link==null) return;
+        try { FrameExporter.drain(frames,link.id,false); } catch(Exception e) { MmlfLog.sampled("render.capture","failed",1000,Map.of("exception",e.toString())); }
+    }
     /** The previous CPU compositor stays available for comparison: -Dmmlf.compositor=cpu. */
     private static final boolean CPU_COMPOSITOR="cpu".equalsIgnoreCase(System.getProperty("mmlf.compositor"));
     /** A remote layer older than this is hidden rather than left frozen on screen. */
@@ -877,7 +933,12 @@ public final class BridgeCore {
             }
             // Captured section meshes do not yet cover Sodium, block entities or animated geometry.
             // Keep the complete native frame until all content has a safe unified rendering path.
-            RemoteCompositor.draw(frame,pixels,current,target.width,target.height);
+            boolean unifiedPreview=Experiments.UNIFIED_PREVIEW && dev.mmlf.bridge.render.GeometryLayer.remoteReplayReady(frame.runtime(),frame.pose().dimension());
+            if(unifiedPreview && !unifiedPreviewReported) {
+                unifiedPreviewReported=true;
+                MmlfLog.info("render.submission","unified_preview",Map.of("renderer",frame.runtime(),"window",runtimeId()));
+            }
+            RemoteCompositor.draw(frame,pixels,current,target.width,target.height,unifiedPreview);
             if(!compositeReported) {compositeReported=true;System.out.println("MMLF COMPOSITE READY remote="+frame.runtime()+" mode=gpu");}
         }
     }

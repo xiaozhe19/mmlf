@@ -8,6 +8,8 @@ import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 @Mixin(GameRenderer.class)
 public abstract class GameRendererMixin {
+ @Inject(method="renderLevel",at=@At("HEAD"))
+ private void mmlf$beginFrame(DeltaTracker delta,CallbackInfo ci) { dev.mmlf.bridge.render.GeometryLayer.beginFrame(delta.getGameTimeDeltaPartialTick(false)); }
  @Inject(method="renderLevel",at=@At(value="INVOKE",target="Lcom/mojang/blaze3d/systems/RenderSystem;clear(IZ)V",shift=At.Shift.BEFORE),require=1)
  private void mmlf$capture(DeltaTracker delta,CallbackInfo ci) { BridgeCore.captureFrame(); dev.mmlf.bridge.VisualLayers.beforeHand(); }
  @Inject(method="getFov",at=@At("RETURN"),cancellable=true)

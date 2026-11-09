@@ -28,12 +28,17 @@ public abstract class LevelChunkMixin implements NeighborMirror.Overlaid {
 
  @ModifyReturnValue(method="getBlockState",at=@At("RETURN"))
  private BlockState mmlf$mirrored(BlockState own,BlockPos pos) {
-  return mmlf$overlaid ? NeighborMirror.read((LevelChunk)(Object)this,pos,own) : own;
+  if(!mmlf$overlaid) return own;
+  var chunk=(LevelChunk)(Object)this;
+  return dev.mmlf.bridge.Occupancy.read(chunk,pos,NeighborMirror.read(chunk,pos,own));
  }
  @Inject(method="setBlockState",at=@At("RETURN"))
  private void mmlf$changed(BlockPos pos,BlockState state,boolean moved,CallbackInfoReturnable<BlockState> cir) {
   // Null: nothing changed, or the block was replaced again while being removed.
-  if(cir.getReturnValue()!=null && ((LevelChunk)(Object)this).getLevel() instanceof ServerLevel level) Boundary.changed(level,pos,state);
+  if(cir.getReturnValue()!=null && ((LevelChunk)(Object)this).getLevel() instanceof ServerLevel level) {
+   dev.mmlf.bridge.DemoScene.watch(pos,cir.getReturnValue(),state,true);
+   Boundary.changed(level,pos,state);
+  }
  }
  @Inject(method="setLoaded",at=@At("TAIL"))
  private void mmlf$loaded(boolean loaded,CallbackInfo ci) {

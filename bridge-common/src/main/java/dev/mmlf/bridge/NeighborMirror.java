@@ -91,7 +91,7 @@ public final class NeighborMirror {
         refreshAny();
         if(level.isLoaded(pos)) {
             LevelChunk chunk=level.getChunkAt(pos);
-            ((Overlaid)chunk).mmlf$setOverlaid(hasAny(states,chunk));
+            reflag(chunk);
             BlockState now=level.getBlockState(pos);
             // As when a block changes: neighbours are told, and this runtime's own blocks beside it update their shape.
             level.updateNeighborsAt(pos,now.getBlock());
@@ -99,7 +99,10 @@ public final class NeighborMirror {
                 BlockPos next=pos.relative(d); BlockState own=level.getBlockState(next);
                 if(!Boundary.owns(own,next)) continue;
                 BlockState shaped=own.updateShape(d.getOpposite(),now,level,next,pos);
-                if(shaped!=own) level.setBlock(next,shaped,3);
+                // A mirrored neighbour may change how this runtime's block connects, never whether it exists: the
+                // other runtime's block may be momentary (its world still being built), and a removal cannot be undone.
+                if(shaped!=own && shaped.is(own.getBlock())) level.setBlock(next,shaped,3);
+                else if(shaped!=own) MmlfLog.info("neighbors","shape_removal_ignored",Map.of("position",next.toShortString(),"block",own.toString(),"mirrored",pos.toShortString(),"neighbour",now.toString()));
             }
         }
     }
@@ -108,13 +111,17 @@ public final class NeighborMirror {
         var states=overlay.get(level.dimension().location().toString());
         if(states==null || states.remove(pos.asLong())==null) return;
         refreshAny();
-        if(level.isLoaded(pos)) { LevelChunk chunk=level.getChunkAt(pos); ((Overlaid)chunk).mmlf$setOverlaid(hasAny(states,chunk)); }
+        if(level.isLoaded(pos)) reflag(level.getChunkAt(pos));
     }
     /** A chunk was loaded again: its mirrored positions are flagged on the new chunk object. */
     static void chunk(LevelChunk chunk,boolean loaded) {
         if(!loaded) return;
+        reflag(chunk);
+    }
+    /** Whether reads of the chunk consult an overlay: mirrored neighbours here, or other runtimes' blocks ({@link Occupancy}). */
+    static void reflag(LevelChunk chunk) {
         var states=overlay.get(chunk.getLevel().dimension().location().toString());
-        if(states!=null) ((Overlaid)chunk).mmlf$setOverlaid(hasAny(states,chunk));
+        ((Overlaid)chunk).mmlf$setOverlaid(states!=null && hasAny(states,chunk) || Occupancy.covers(chunk));
     }
     private static boolean hasAny(Map<Long,BlockState> states,LevelChunk chunk) {
         var cp=chunk.getPos();

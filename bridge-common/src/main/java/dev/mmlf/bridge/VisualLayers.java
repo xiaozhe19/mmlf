@@ -47,7 +47,8 @@ public final class VisualLayers {
  private static String held() {
   var mc=Minecraft.getInstance();return mc.player==null?"minecraft:air":RemoteItems.held(mc.player.getMainHandItem());
  }
- public static boolean replacePrimaryHand() {return BridgeCore.isPrimary() && RemoteItemRef.parse(held()).isPresent();}
+ /** The primary's own hand is replaced by the owner's hand pixels, unless the unified render layer draws the item itself. */
+ public static boolean replacePrimaryHand() {return BridgeCore.isPrimary() && !dev.mmlf.bridge.render.GeometryLayer.ownerSubmitting() && RemoteItemRef.parse(held()).isPresent();}
  private static byte[] encode(Visual visual) {return Wire.JSON.toJson(visual).getBytes(java.nio.charset.StandardCharsets.UTF_8);}
  /** Null when the metadata does not describe an image of {@code owner}'s own item. */
  private static Visual decode(FrameFile.Latest latest,String owner) {
@@ -83,7 +84,8 @@ public final class VisualLayers {
   var mc=Minecraft.getInstance();if(BridgeCore.session()==null || mc.player==null) return;
   if(BridgeCore.isPrimary()) {compositeHand();return;}
   renderRequestedIcon();
-  if(!RemoteItems.nativeHandSelected()) return;
+  // Under the unified render layer the render host draws held items from their meshes; no hand pixels are needed.
+  if(!RemoteItems.nativeHandSelected() || dev.mmlf.bridge.render.OwnedSectionCompiler.hideNative()) return;
   // Until the mirrored inventory has put the selected stack in this hand, a frame would show the wrong hand.
   if(InventoryBridge.heldProblem(mc.player.getMainHandItem(),RemoteItems.selectedReference())!=null) return;
   long now=System.nanoTime();
@@ -173,6 +175,8 @@ public final class VisualLayers {
    }
   }
  }
+ /** Whether item icons requested by the primary still wait for this runtime's next world frame. */
+ public static boolean iconsPending() {synchronized(requestedIcons) {return !requestedIcons.isEmpty();}}
  private static void renderRequestedIcon() {
   String reference;
   synchronized(requestedIcons) {if(requestedIcons.isEmpty()) return;var it=requestedIcons.iterator();reference=it.next();it.remove();}

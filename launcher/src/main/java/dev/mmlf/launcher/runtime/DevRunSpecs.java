@@ -23,8 +23,21 @@ public final class DevRunSpecs {
     public static Path prepareGameDirectory(SessionHost session,Path root,String runtime) throws Exception {
         Path game=session.directory().resolve(runtime);
         SessionHost.stageMods(SessionHost.modsSource(root),SessionHost.LOADERS.get(runtime),game.resolve("mods"));
+        // Explicit test-only shader pack: the remote directory is newly created for this session.
+        String testPack=System.getenv("MMLF_TEST_SHADERPACK");
+        if(testPack!=null && !testPack.isBlank()) stageTestShaderpack(game,Path.of(testPack));
         session.suppressEarlyWindow(runtime,game);
         return game;
+    }
+
+    static void stageTestShaderpack(Path game,Path pack) throws IOException {
+        Path source=pack.toAbsolutePath().normalize();
+        if(!Files.isRegularFile(source) || !source.getFileName().toString().endsWith(".zip")) throw new IOException("Invalid test shader pack: "+source);
+        Path packs=game.resolve("shaderpacks"),config=game.resolve("config");
+        Files.createDirectories(packs); Files.createDirectories(config);
+        Files.copy(source,packs.resolve(source.getFileName()),StandardCopyOption.REPLACE_EXISTING);
+        Properties options=new Properties(); options.setProperty("enableShaders","true"); options.setProperty("shaderPack",source.getFileName().toString());
+        try(var writer=Files.newBufferedWriter(config.resolve("iris.properties"),StandardCharsets.UTF_8)) { options.store(writer,"MMLF isolated shader test"); }
     }
 
     /** Process backend: all given runtimes from one Gradle invocation, as one handle. */

@@ -1,0 +1,12 @@
+{
+  "description": "Configuration written into the game directory of the runtime that does not draw the scene (the submitter) when the unified render layer is on and that runtime has the named mod. Render mods stay installed there but must not draw content past the generic capture paths (block-entity and entity dispatchers, the chunk compiler).",
+  "overrides": [
+    {
+      "mods": ["create"],
+      "files": {
+        "config/flywheel-client.toml": "#MMLF unified render layer: the submitter records block entities through the vanilla dispatchers; Flywheel instancing would draw straight to the GPU, out of reach.\nbackend = \"flywheel:off\"\n"
+      },
+      "reason": "Create bundles Flywheel; with its backend off Create draws kinetic parts through block-entity renderers, as Flywheel itself does whenever a shader pack is active."
+    }
+  ]
+}

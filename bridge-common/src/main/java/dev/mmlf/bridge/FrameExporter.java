@@ -78,6 +78,7 @@ final class FrameExporter {
             ByteBuffer mapped=GL30.glMapBufferRange(GL21.GL_PIXEL_PACK_BUFFER,0,2L*n,GL30.GL_MAP_READ_BIT);
             if(mapped==null) { MmlfLog.sampled("render.capture","map_failed",1000,Map.of("frameId",slot.frameId)); return; }
             try {
+                dev.mmlf.bridge.render.NativeWorld.observeDepth(mapped.slice(n,n));
                 // The slot index is unknown before publishing and meaningless to a polling reader.
                 Frame frame=new Frame(runtime,slot.frameId,slot.pose,-1,slot.width,slot.height,slot.started,true,"opengl-window-depth",slot.clock.offsetNanos(),slot.sessionId,slot.cameraSequence,slot.clock.uncertaintyNanos());
                 byte[] metadata=Wire.JSON.toJson(frame).getBytes(java.nio.charset.StandardCharsets.UTF_8);

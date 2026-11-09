@@ -36,6 +36,20 @@ public abstract class MinecraftMixin {
  /** Only the primary pauses: a background showing a pausing screen would otherwise stop its server, and the machines in it. */
  @org.spongepowered.asm.mixin.injection.Redirect(method="runTick",at=@At(value="INVOKE",target="Lnet/minecraft/client/gui/screens/Screen;isPauseScreen()Z"))
  private boolean mmlf$pause(net.minecraft.client.gui.screens.Screen screen) { return screen.isPauseScreen() && (BridgeCore.isPrimary() || !BridgeCore.connected()); }
+ /**
+  * Unified render layer, submitting runtime: records its dynamic content before each frame, and skips its own world
+  * pass while nothing of it is needed (see {@code NativeWorld}). Skipping goes through the flag vanilla itself uses
+  * for frames without a world, so every mod's hooks around the world pass stay paired.
+  */
+ @com.llamalad7.mixinextras.injector.wrapoperation.WrapOperation(method="runTick",at=@At(value="INVOKE",target="Lnet/minecraft/client/renderer/GameRenderer;render(Lnet/minecraft/client/DeltaTracker;Z)V"))
+ private void mmlf$frame(net.minecraft.client.renderer.GameRenderer renderer,net.minecraft.client.DeltaTracker delta,boolean renderLevel,com.llamalad7.mixinextras.injector.wrapoperation.Operation<Void> original) {
+  Minecraft mc=(Minecraft)(Object)this;
+  if(BridgeCore.isPrimary() || !dev.mmlf.bridge.Experiments.GEOMETRY_REPLAY) { original.call(renderer,delta,renderLevel); return; }
+  dev.mmlf.bridge.render.DynamicCapture.frame(mc,delta);
+  boolean world=dev.mmlf.bridge.render.NativeWorld.renderWorld(renderLevel);
+  if(!world) { BridgeCore.drainExportedFrames(); dev.mmlf.bridge.render.NativeWorld.keepClientWorld(mc); }
+  original.call(renderer,delta,world);
+ }
  @Inject(method="pickBlock",at=@At("HEAD"),cancellable=true)
  private void mmlf$pick(CallbackInfo ci) {if(BridgeCore.requestInteraction("pick")) ci.cancel();}
 }

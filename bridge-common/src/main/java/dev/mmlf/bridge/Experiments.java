@@ -11,8 +11,11 @@ import java.util.Set;
  * <li>{@code thin_world}: a background opens a void world and places only what it owns.</li>
  * <li>{@code on_demand}: a background renders at a low rate while neither the camera nor its objects change.</li>
  * <li>{@code render_scale}: a background renders at {@code mmlf.renderScale} (default 0.5) of the primary's size.</li>
- * <li>{@code geometry}: a background publishes its chunk-section meshes and block atlas; the primary draws them in its
- * own section layers instead of compositing the background's world pixels ({@link dev.mmlf.bridge.render.GeometryLayer}).</li>
+ * <li>{@code geometry}: the runtime that does not draw the scene meshes the sections holding its own blocks and
+ * publishes them with its block atlas ({@link dev.mmlf.bridge.render.GeometryLayer}).</li>
+ * <li>{@code geometry_replay} (with {@code geometry}): unified render layer. The render host draws the submitted
+ * sections and the submitter's recorded block entities and entities; once it confirms, the submitter leaves all of it
+ * out of its own world pass and eventually skips that pass ({@link dev.mmlf.bridge.render.NativeWorld}).</li>
  * <li>{@code follow}: a background loads the chunks of its objects as far as the primary loads them, and its players
  * hold no chunk tickets ({@link ChunkFollow}).</li>
  * <li>{@code small_view}: a background uses render distance 2, so its integrated server loads few chunks.</li>
@@ -28,6 +31,10 @@ public final class Experiments {
     public static final boolean RENDER_SCALE=ENABLED.contains("render_scale");
     public static final boolean LOCKSTEP=ENABLED.contains("lockstep");
     public static final boolean GEOMETRY=ENABLED.contains("geometry");
+    /** Unified render layer; the composited native frame remains only as a fallback for residual content. */
+    public static final boolean GEOMETRY_REPLAY=GEOMETRY && ENABLED.contains("geometry_replay");
+    /** Diagnostic whole-scene presentation; incomplete scene types still require native fallback. */
+    public static final boolean UNIFIED_PREVIEW=GEOMETRY_REPLAY && ENABLED.contains("unified_preview");
     public static final boolean SMALL_VIEW=ENABLED.contains("small_view");
     public static final boolean FOLLOW=ENABLED.contains("follow");
     public static final double SCALE=RENDER_SCALE ? Double.parseDouble(System.getProperty("mmlf.renderScale","0.5")) : 1.0;

@@ -1,0 +1,182 @@
+{
+  "placements": [
+    {
+      "runtime": "neoforge",
+      "block": "create:creative_motor",
+      "x": 5,
+      "y": 100,
+      "z": 1,
+      "properties": {
+        "facing": "east"
+      },
+      "optional": true
+    },
+    {
+      "runtime": "neoforge",
+      "block": "create:cogwheel",
+      "x": 6,
+      "y": 100,
+      "z": 1,
+      "properties": {
+        "axis": "x"
+      },
+      "optional": true
+    },
+    {
+      "runtime": "fabric",
+      "block": "mmlf_fabric_test:demo_block",
+      "x": -1,
+      "y": 100,
+      "z": 0
+    },
+    {
+      "runtime": "neoforge",
+      "block": "mmlf_neoforge_test:demo_block",
+      "x": 1,
+      "y": 100,
+      "z": 0
+    },
+    {
+      "runtime": "fabric",
+      "block": "mcwdoors:oak_four_panel_door",
+      "x": -3,
+      "y": 100,
+      "z": 0,
+      "optional": true
+    },
+    {
+      "runtime": "neoforge",
+      "block": "mcwtrpdoors:oak_four_panel_trapdoor",
+      "x": 3,
+      "y": 100,
+      "z": 0,
+      "optional": true
+    },
+    {
+      "runtime": "fabric",
+      "block": "mmlf_fabric_test:gui_block",
+      "x": -1,
+      "y": 100,
+      "z": -3
+    },
+    {
+      "runtime": "fabric",
+      "block": "mmlf_fabric_test:box_block",
+      "x": -2,
+      "y": 100,
+      "z": -3
+    },
+    {
+      "runtime": "neoforge",
+      "block": "mmlf_neoforge_test:gui_block",
+      "x": 1,
+      "y": 100,
+      "z": -3
+    },
+    {
+      "runtime": "neoforge",
+      "block": "mmlf_neoforge_test:box_block",
+      "x": 2,
+      "y": 100,
+      "z": -3
+    },
+    {
+      "runtime": "fabric",
+      "block": "minecraft:chest",
+      "x": -6,
+      "y": 101,
+      "z": -3,
+      "properties": {
+        "facing": "south"
+      },
+      "items": [
+        "minecraft:cobblestone*32",
+        "minecraft:oak_log*16",
+        "minecraft:iron_ingot*8"
+      ],
+      "optional": true
+    },
+    {
+      "runtime": "fabric",
+      "block": "toms_storage:inventory_connector",
+      "x": -5,
+      "y": 101,
+      "z": -3,
+      "optional": true
+    },
+    {
+      "runtime": "fabric",
+      "block": "toms_storage:storage_terminal",
+      "x": -4,
+      "y": 101,
+      "z": -3,
+      "properties": {
+        "facing": "south"
+      },
+      "optional": true
+    },
+    {
+      "runtime": "neoforge",
+      "block": "farmersdelight:stove",
+      "x": 4,
+      "y": 100,
+      "z": -3,
+      "properties": {
+        "facing": "south",
+        "lit": "true"
+      },
+      "optional": true
+    },
+    {
+      "runtime": "neoforge",
+      "block": "farmersdelight:cooking_pot",
+      "x": 4,
+      "y": 101,
+      "z": -3,
+      "properties": {
+        "facing": "south"
+      },
+      "optional": true
+    },
+    {
+      "runtime": "background",
+      "block": "mmlf_{background}_test:crate_block",
+      "x": 5,
+      "y": 100,
+      "z": 7
+    },
+    {
+      "runtime": "primary",
+      "block": "minecraft:hopper",
+      "x": 5,
+      "y": 101,
+      "z": 7,
+      "properties": {
+        "facing": "down"
+      },
+      "items": [
+        "minecraft:cobblestone*8"
+      ]
+    },
+    {
+      "runtime": "background",
+      "block": "mmlf_{background}_test:crate_block",
+      "x": -5,
+      "y": 101,
+      "z": 7,
+      "items": [
+        "minecraft:emerald*4"
+      ]
+    },
+    {
+      "runtime": "primary",
+      "block": "minecraft:hopper",
+      "x": -5,
+      "y": 100,
+      "z": 7,
+      "properties": {
+        "facing": "east"
+      }
+    }
+  ]
+}

@@ -1,10 +1,15 @@
 package dev.mmlf.bridge.mixin;
 import net.minecraft.client.renderer.LevelRenderer;
+
+
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
-/** Render ownership for parts a background may safely skip. */
+/**
+ * Render ownership for parts a background may safely skip. The unified render layer does not cancel these: other
+ * mods pair hooks at their head and return, and the sky writes no depth, so it never keeps a composited frame alive.
+ */
 @Mixin(LevelRenderer.class)
 public abstract class LevelRendererMixin {
  /** Render ownership: a background's sky and weather are drawn by the primary (see {@code RenderOwnership}). */

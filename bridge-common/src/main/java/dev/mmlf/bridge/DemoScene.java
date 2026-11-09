@@ -25,6 +25,26 @@ public final class DemoScene {
  public record Scene(List<Placement> placements) {}
  /** The scene as loaded, for the collaboration self-test. */
  static Scene scene;
+ /** Diagnostics: positions of this runtime's scene blocks (with the upper half of double blocks), watched for changes. */
+ private static final java.util.Set<Long> watched=java.util.concurrent.ConcurrentHashMap.newKeySet();
+ private static volatile long watchUntil;
+ /** A watched scene block changed, on the server ({@code server}) or the client; the server side records who changed it. */
+ public static void watch(BlockPos pos,net.minecraft.world.level.block.state.BlockState old,net.minecraft.world.level.block.state.BlockState now,boolean server) {
+  if(watched.isEmpty() || System.currentTimeMillis()>watchUntil || !watched.contains(pos.asLong()) || java.util.Objects.equals(old,now)) return;
+  var fields=new java.util.LinkedHashMap<String,Object>();
+  fields.put("side",server?"server":"client"); fields.put("position",pos.toShortString()); fields.put("old",String.valueOf(old)); fields.put("new",String.valueOf(now));
+  if(server) {
+   var frames=new java.util.ArrayList<String>();
+   for(var frame:Thread.currentThread().getStackTrace()) {
+    String name=frame.getClassName();
+    if(name.startsWith("java.") || name.contains("DemoScene") || name.contains("LevelChunk")) continue;
+    frames.add(name.substring(name.lastIndexOf('.')+1)+"."+frame.getMethodName()+":"+frame.getLineNumber());
+    if(frames.size()>=10) break;
+   }
+   fields.put("by",frames);
+  }
+  MmlfLog.warn("scene","scene_block_changed",fields);
+ }
  static Session sceneSession;
  /**
   * A placement's runtime may be {@code primary} or {@code background} instead of a loader, and its block may name
@@ -136,7 +156,8 @@ public final class DemoScene {
     var server=mc.getSingleplayerServer();
     server.execute(()->{
      var level=server.overworld();
-     level.setDayTime(6000);level.setWeatherParameters(0,0,false,false);
+     // Manual sessions start at 10d (sunrise, a low sun with long shadows); the self-tests keep noon for comparable screenshots.
+     level.setDayTime(Files.exists(session.root().resolve("self-test"))?6000:240000);level.setWeatherParameters(0,0,false,false);
      level.getGameRules().getRule(GameRules.RULE_DAYLIGHT).set(false,server);
      level.getGameRules().getRule(GameRules.RULE_WEATHER_CYCLE).set(false,server);
      // A thin background has no vanilla terrain of its own: the floor exists only in the primary's world.
@@ -161,6 +182,23 @@ public final class DemoScene {
       if(blockState.hasProperty(net.minecraft.world.level.block.state.properties.BlockStateProperties.DOUBLE_BLOCK_HALF))
        level.setBlock(at.above(),blockState.setValue(net.minecraft.world.level.block.state.properties.BlockStateProperties.DOUBLE_BLOCK_HALF,net.minecraft.world.level.block.state.properties.DoubleBlockHalf.UPPER),3);
      }
+     watched.clear(); watchUntil=System.currentTimeMillis()+120_000;
+     for(Placement item:scene.placements()) if(owner(item,session).equals(runtime)) { var at=new BlockPos(item.x(),item.y(),item.z()); watched.add(at.asLong()); watched.add(at.above().asLong()); }
+     // Diagnostics: two seconds later, every block this runtime placed should still be there.
+     var placed=new java.util.ArrayList<java.util.Map.Entry<BlockPos,net.minecraft.world.level.block.state.BlockState>>();
+     for(Placement item:scene.placements()) if(owner(item,session).equals(runtime)) {
+      var at=new BlockPos(item.x(),item.y(),item.z()); var state=level.getChunkAt(at).getSection(level.getSectionIndex(at.getY())).getBlockState(at.getX()&15,at.getY()&15,at.getZ()&15);
+      if(!state.isAir()) placed.add(java.util.Map.entry(at,state));
+     }
+     server.tell(new net.minecraft.server.TickTask(server.getTickCount()+40,()->{
+      for(var entry:placed) {
+       BlockPos at=entry.getKey(); var raw=level.getChunkAt(at).getSection(level.getSectionIndex(at.getY())).getBlockState(at.getX()&15,at.getY()&15,at.getZ()&15);
+       var read=level.getBlockState(at);
+       if(!raw.equals(entry.getValue()) || !read.equals(entry.getValue()))
+        MmlfLog.warn("scene","placement_lost",Map.of("position",at.toShortString(),"placed",entry.getValue().toString(),"raw",raw.toString(),"read",read.toString(),"mirrored",NeighborMirror.mirrored(level,at)));
+      }
+      MmlfLog.info("scene","placements_checked",Map.of("runtime",runtime,"count",placed.size()));
+     }));
      var player=server.getPlayerList().getPlayers().getFirst();
      player.teleportTo(0.5,100,4.5); player.setYRot(180); player.setXRot(10);
      mc.execute(()->{mc.player.setPos(0.5,100,4.5);mc.player.setYRot(180);mc.player.setXRot(10);});

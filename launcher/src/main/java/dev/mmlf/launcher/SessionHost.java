@@ -36,7 +36,9 @@ public final class SessionHost implements AutoCloseable {
 
     /** Development session under the project's {@code runtime} directory, with the project's demo scene. */
     public static SessionHost create(Path root,String primary,boolean selfTest,Endpoint endpoint) throws Exception {
-        Path sceneConfig=root.resolve("config/demo-scene.json");
+        // Manual sessions use the visual scene (no redstone fixtures) when present; the self-tests need the full one.
+        Path visual=root.resolve("config/visual-scene.json");
+        Path sceneConfig=!selfTest && Files.isRegularFile(visual) ? visual : root.resolve("config/demo-scene.json");
         return create(root.resolve("runtime"),Files.isRegularFile(sceneConfig)?Files.readString(sceneConfig):DEFAULT_SCENE,primary,selfTest,endpoint);
     }
     /** Development scene used when the project has no config/demo-scene.json. */

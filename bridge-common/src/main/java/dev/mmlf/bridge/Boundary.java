@@ -45,7 +45,7 @@ public final class Boundary {
 
     /** Whether this runtime owns what is at the position: its mod blocks, and the vanilla blocks it placed itself. */
     static boolean owns(BlockState state,BlockPos pos) {
-        if(state.isAir()) return false;
+        if(state.isAir() || StandInBlock.is(state)) return false;
         var key=BuiltInRegistries.BLOCK.getKey(state.getBlock());
         return key!=null && (!key.getNamespace().equals("minecraft") || BridgeCore.ownsVanilla(pos));
     }
@@ -61,6 +61,7 @@ public final class Boundary {
     public static void chunk(LevelChunk chunk,boolean loaded) {
         if(!(chunk.getLevel() instanceof ServerLevel level)) return;
         NeighborMirror.chunk(chunk,loaded);
+        Occupancy.chunk(chunk,loaded);
         if(loaded) { loadedChunks.add(chunk); return; }
         String dimension=level.dimension().location().toString(); var chunkPos=chunk.getPos();
         loadedChunks.remove(chunk);
@@ -136,6 +137,9 @@ public final class Boundary {
         state.getValues().forEach((property,value)->properties.put(property.getName(),value.toString()));
         var collision=state.getCollisionShape(level,at.pos()).toAabbs().stream().map(b->new double[]{b.minX,b.minY,b.minZ,b.maxX,b.maxY,b.maxZ}).toList();
         properties.put("_collision",Wire.JSON.toJson(collision));
+        // What the primary's world needs to know of the space it takes (Occupancy): light and occlusion.
+        if(!state.isSolidRender(level,at.pos())) properties.put("_occlusion","partial");
+        if(state.getLightEmission()>0) properties.put("_light",Integer.toString(state.getLightEmission()));
         if(ItemAccess.has(level,at.pos())) properties.put(CONTAINER,"true");
         if(old!=null && old.type().equals(key) && old.state().equals(properties)) return;
         String self=BridgeCore.runtimeId(); var pos=at.pos();
