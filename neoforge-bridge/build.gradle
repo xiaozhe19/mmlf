@@ -10,8 +10,6 @@ evaluationDependsOn(':launcher')
 sourceSets.main.resources.srcDir '../bridge-common/src/main/resources'
 dependencies {
     implementation project(':common')
-    implementation('org.java-websocket:Java-WebSocket:1.6.0') { exclude group: 'org.slf4j', module: 'slf4j-api' }
-    jarJar('org.java-websocket:Java-WebSocket:1.6.0') { exclude group: 'org.slf4j', module: 'slf4j-api' }
 }
 neoForge {
     version = neoforge_version
@@ -42,12 +40,9 @@ tasks.register('stageHostMods', JavaExec) {
         file(System.getenv('MMLF_GAME_ROOT') ? System.getenv('MMLF_GAME_ROOT') + '/neoforge/mods' : 'run/mods').absolutePath
 }
 tasks.named('runClient') { dependsOn ':neoforge-test-mod:classes', 'stageHostMods' }
-// Only the jar carries the session manager: development runs host sessions through Gradle instead.
-tasks.named('jar') { from(project(':launcher').tasks.named('managerJar')) { into 'META-INF/mmlf'; rename { 'mmlf-manager.jar' } } }
 
 
 
-dependencies { additionalRuntimeClasspath('org.java-websocket:Java-WebSocket:1.6.0') { exclude group: 'org.slf4j', module: 'slf4j-api' } }
 
 // Describes runClient for a session host that starts this runtime inside its own JVM.
 apply from: rootProject.file('gradle/client-run-spec.gradle')

@@ -8,17 +8,16 @@ import java.util.Locale;
 import java.util.Map;
 
 /**
- * Opens the session's frame channels (world, hand, icon, GUI, catalog atlases). Runtimes in separate processes share
- * frame files; runtimes in one JVM may instead share frames in memory ({@link FrameFile#memoryWriter}), chosen with
- * {@code -Dmmlf.frameChannel} (or {@code MMLF_FRAME_CHANNEL}): {@code file} (default) or {@code direct}. Both ends read the same JVM-wide setting, so
- * writer and reader always agree; a process session always uses files.
+ * Opens the session's frame channels (world, hand, icon, GUI, catalog atlases): memory-mapped frame files, or frames
+ * shared in memory ({@link FrameFile#memoryWriter}), chosen with {@code -Dmmlf.frameChannel} (or
+ * {@code MMLF_FRAME_CHANNEL}): {@code file} (default) or {@code direct}. Both ends read the same JVM-wide setting, so
+ * writer and reader always agree.
  */
 public final class Frames {
     private Frames() {}
     public enum Mode { FILE, DIRECT }
 
     public static Mode mode(Session session) {
-        if(!session.inJvm()) return Mode.FILE;
         String value=System.getProperty("mmlf.frameChannel",System.getenv().getOrDefault("MMLF_FRAME_CHANNEL","file")).toLowerCase(Locale.ROOT);
         return value.equals("direct")?Mode.DIRECT:Mode.FILE;
     }

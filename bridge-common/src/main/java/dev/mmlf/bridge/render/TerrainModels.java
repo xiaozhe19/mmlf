@@ -8,5 +8,5 @@ public final class TerrainModels {
     private TerrainModels() {}
     public static void install(BakedModel value) { model=value; }
     public static BakedModel get() { return model; }
-    public static boolean enabled() { return TerrainAtlas.ENABLED && dev.mmlf.bridge.Experiments.GEOMETRY_REPLAY && dev.mmlf.bridge.BridgeCore.isPrimary(); }
+    public static boolean enabled() { return dev.mmlf.bridge.Experiments.TERRAIN && dev.mmlf.bridge.BridgeCore.isPrimary(); }
 }

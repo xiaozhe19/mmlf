@@ -5,8 +5,8 @@ import java.util.*;
 
 /**
  * A Java launch of one game runtime, as its loader's own launch would run it: main class, class path, module path,
- * system properties, other JVM options and program arguments. The process backend renders it as a command line; the
- * in-JVM backend starts the same main class inside an isolated class loader.
+ * system properties, other JVM options and program arguments. The in-JVM backend starts its main class inside an
+ * isolated class loader; {@link #command} renders it as the equivalent command line.
  *
  * @param jvmOptions JVM options other than class path, module path and {@code -D}, such as {@code --add-opens}
  */
@@ -37,7 +37,7 @@ public record JavaLaunch(String mainClass,List<Path> classpath,List<Path> module
         return withArgs(out);
     }
 
-    /** {@code java ... main args} for the process backend. */
+    /** The equivalent {@code java ... main args} command line. */
     public List<String> command(Path java,List<String> extraJvm) {
         String separator=System.getProperty("path.separator");
         List<String> command=new ArrayList<>();

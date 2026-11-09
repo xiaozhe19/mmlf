@@ -11,7 +11,7 @@ subprojects {
     dependencies { testImplementation 'org.junit.jupiter:junit-jupiter:5.11.4'; testRuntimeOnly 'org.junit.platform:junit-platform-launcher' }
 }
 
-// Release mods for players: one jar per loader, each carrying the session manager.
+// Release mods for players: one jar per loader.
 tasks.register('release', Copy) {
     def fabric = project(':fabric-bridge'), neoforge = project(':neoforge-bridge')
     dependsOn fabric.tasks.named('remapJar'), neoforge.tasks.named('jar')

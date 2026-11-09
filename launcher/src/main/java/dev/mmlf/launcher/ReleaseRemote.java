@@ -32,14 +32,14 @@ public final class ReleaseRemote {
         String remote=remoteOf(primary);
         String name=remote.equals("fabric")?"Fabric":"NeoForge";
         progress.accept(0.1,"查找已安装的 "+name+" 版本");
-        VersionProfile profile=Manager.remoteVersion(minecraftRoot,remote,minecraftVersion);
+        VersionProfile profile=ReleaseSupport.remoteVersion(minecraftRoot,remote,minecraftVersion);
         Path isolated=minecraftRoot.resolve("versions").resolve(profile.id());
         Path instance=Files.isDirectory(isolated.resolve("mods"))?isolated:minecraftRoot;
         progress.accept(0.3,"检查 "+profile.id()+" 的模组");
-        List<Path> mods=Manager.remoteMods(instance.resolve("mods"),remote);
+        List<Path> mods=ReleaseSupport.remoteMods(instance.resolve("mods"),remote);
         Path game=gameDirectory.resolve("mmlf").resolve(remote);
         progress.accept(0.5,"准备远端运行目录（"+mods.size()+" 个模组）");
-        Manager.stage(mods,instance,game);
+        ReleaseSupport.stage(mods,instance,game);
         return new Prepared(remote,profile,instance,mods,game);
     }
 
@@ -63,11 +63,5 @@ public final class ReleaseRemote {
         properties.put("org.lwjgl.system.SharedLibraryExtractPath",natives.toString());
         launch=new JavaLaunch(launch.mainClass(),launch.classpath(),launch.modulePath(),properties,options,launch.args());
         return RuntimeSpec.java(prepared.remote(),prepared.remote(),prepared.game(),sessionDirectory.resolve(prepared.remote()+".log"),launch);
-    }
-
-    /** The remote as its own process, as the session manager starts it. */
-    public static RuntimeSpec process(Prepared prepared,Path sessionDirectory,Path java,VersionProfile.Account account,Map<String,String> launcher,List<String> extraJvm) {
-        List<String> command=prepared.profile().command(java,prepared.game(),natives(prepared),account,launcher,extraJvm);
-        return RuntimeSpec.command(prepared.remote(),prepared.remote(),sessionDirectory.resolve(prepared.remote()+".log"),new RuntimeSpec.Command(command,prepared.game(),List.of(prepared.remote())));
     }
 }

@@ -46,7 +46,6 @@ public final class BridgeCore {
     private static final java.util.Set<String> peers = new java.util.HashSet<>();
     private static long metricAt, metricFrames, previousCpu;
     private static boolean compositeReported;
-    private static boolean unifiedPreviewReported;
     private static final java.util.Set<net.minecraft.core.BlockPos> ownedVanilla=java.util.concurrent.ConcurrentHashMap.newKeySet();
     private static long lastAttack;
     private static long lastResize,lastLinked;
@@ -61,6 +60,8 @@ public final class BridgeCore {
     public static String primaryId() {return session==null?null:session.primary();}
     /** Sends a control message when linked; dropped otherwise, like every other bridge message. */
     public static void send(String type,String target,Object body) { if(link!=null) link.send(type,target,body); }
+    /** A report only the primary acts on, delivered once even across a reconnect. */
+    static void sendToPrimary(String type,Object body) { if(link!=null && !primary && session!=null) link.sendReliable(type,session.primary(),body); }
     /** Sends a message that must arrive exactly once (a resource change, a lifecycle report); kept across reconnects. */
     public static void sendReliable(String type,String target,Object body) { if(link!=null) link.sendReliable(type,target,body); }
     public static FrameTiming.Clock calibration() { return link==null?null:link.calibration(); }
@@ -183,14 +184,20 @@ public final class BridgeCore {
         } else if(message.type().equals("runtime_joined")) {
             String id=message.data().get("runtime").getAsString(); mc.execute(()->peers.add(id)); RedstoneBridge.runtimeJoined();
         } else if(message.type().equals("runtime_left")) {
-            String id=message.data().get("runtime").getAsString(); readyRuntimes.remove(id); if(id.equals(session.primary())) playerVersion=0; Boundary.forgetRemote(id); Occupancy.forget(id); RedstoneBridge.runtimeLeft(id); mc.execute(()->{peers.remove(id); GuiClient.runtimeLeft(id); RemoteCatalog.forget(id); if(id.equals(session.primary())) GuiHost.primaryLost("primary_left"); RemoteLayer removed=remoteLayers.remove(id); if(removed!=null) removed.close(); collisions.values().removeIf(v->v.owner().equals(id)); if(id.equals(session.primary())) { lastRemotePose=null; poseSequence=0; poseSourceNanos=0; yawRate=pitchRate=0; predictionLead.reset(); adaptiveOverscan.reset(); }});
+            String id=message.data().get("runtime").getAsString(); readyRuntimes.remove(id); if(id.equals(session.primary())) playerVersion=0; Boundary.forgetRemote(id); Occupancy.forget(id); RemoteEntities.forget(id); RedstoneBridge.runtimeLeft(id); mc.execute(()->{peers.remove(id); GuiClient.runtimeLeft(id); RemoteCatalog.forget(id); if(id.equals(session.primary())) GuiHost.primaryLost("primary_left"); RemoteLayer removed=remoteLayers.remove(id); if(removed!=null) removed.close(); collisions.values().removeIf(v->v.owner().equals(id)); if(id.equals(session.primary())) { lastRemotePose=null; poseSequence=0; poseSourceNanos=0; yawRate=pitchRate=0; predictionLead.reset(); adaptiveOverscan.reset(); }});
         } else if(message.type().equals("disconnected")) {
-            worldReadySent=false; readyRuntimes.clear(); playerVersion=0; Boundary.forgetAllRemote(); Occupancy.forget(null); RedstoneBridge.disconnected();
+            worldReadySent=false; readyRuntimes.clear(); playerVersion=0; Boundary.forgetAllRemote(); Occupancy.forget(null); RemoteEntities.forget(null); RedstoneBridge.disconnected();
             mc.execute(()->{GuiClient.disconnected(); GuiHost.primaryLost("disconnected");peers.clear(); collisions.clear(); remoteLayers.values().forEach(RemoteLayer::close); remoteLayers.clear(); displayFrame=null; displayPixels=null; lastRemotePose=null; poseSequence=0; poseSourceNanos=0; yawRate=pitchRate=0; predictionLead.reset(); adaptiveOverscan.reset();});
         } else if(message.type().equals("ray_request")) {
             RayRequest request=message.body(RayRequest.class); mc.execute(()->raycast(request));
         } else if(message.type().equals("interaction")) {
             Interaction action=message.body(Interaction.class); mc.execute(()->interact(action));
+        } else if(message.type().equals("entities")) {
+            if(primary) RemoteEntities.receive(message.source(),message.body(Messages.Entities.class));
+        } else if(message.type().equals("player_xp")) {
+            if(primary) { int amount=message.body(Messages.PlayerExperience.class).amount(); mc.execute(()->RemoteEntities.applyExperience(mc,amount)); }
+        } else if(message.type().equals("player_damage")) {
+            if(primary) { var damage=message.body(Messages.PlayerDamage.class); mc.execute(()->RemoteEntities.applyDamage(mc,message.source(),damage)); }
         } else if(message.type().equals("interaction_result")) {
             InteractionResult result=message.body(InteractionResult.class); if(primary) mc.execute(()->interactionResult(message.source(),result));
         } else if(message.type().equals("gui")) {
@@ -219,10 +226,6 @@ public final class BridgeCore {
             }
             if(event.topic().equals("mmlf:geometry_consumed")) {
                 dev.mmlf.bridge.render.GeometryLayer.receiveConsumed(message.source(),event.values());
-                return;
-            }
-            if(event.topic().equals("mmlf:render_replay_ready")) {
-                if(primary) dev.mmlf.bridge.render.GeometryLayer.receiveReplaySignal(message.source(),event.values().get("dimension"));
                 return;
             }
             if(event.topic().equals("mmlf:language")) {
@@ -295,6 +298,7 @@ public final class BridgeCore {
         if(link!=null && primary) SessionStatus.tick(mc,peers.stream().anyMatch(p->!p.equals(link.id)),!readyRuntimes.isEmpty(),WorldFollow.enabled(session));
         else if(releaseRuntime!=null) SessionStatus.tick(mc,false,false,false);
         if(link!=null) DemoScene.tick(mc,session,link.id);
+        if(link!=null && link.ready()) { if(primary) RemoteEntities.push(mc); else RemoteEntities.publish(mc,link.id); }
         if(link!=null && link.ready() && WorldFollow.enabled(session)) WorldFollow.tick(mc,primary);
         if(link!=null && !primary) {
             if(!backgroundMusicStopped) {
@@ -305,7 +309,6 @@ public final class BridgeCore {
             long now=System.nanoTime();
             if(link.ready()) { everLinked=true; lastLinked=now; }
             else if(everLinked && now-lastLinked>5_000_000_000L) { stopBackground(mc,"session_lost"); return; }
-            if(++hostCheckTick%20==0 && HOST!=null && !HOST.isAlive()) { stopBackground(mc,"host_exited"); return; }
         }
         // The shared pose never gates the bridge: links and interaction work while it is retried once a second.
         if(link!=null && poseFile==null && System.nanoTime()-nextPoseOpen>=0) {
@@ -476,9 +479,7 @@ public final class BridgeCore {
     }
     /** Whether this runtime is a background whose window stays hidden; known before the window is created. */
     public static boolean hiddenBackground() { return RuntimeContext.current().hiddenWindow(); }
-    /** The process that started this background runtime, when the process backend told us; in-JVM runtimes share it. */
-    private static final ProcessHandle HOST=RuntimeContext.current().host();
-    private static int hostCheckTick, stopCheckTick;
+    private static int stopCheckTick;
     private static boolean stopping;
     private static void stopBackground(Minecraft mc,String reason) {
         if(stopping) return; stopping=true;
@@ -622,8 +623,10 @@ public final class BridgeCore {
     public static boolean requestInteraction(String action) {
         if(!primary || link==null || !link.ready() || peers.size()<2 || primaryPose==null) return false;
         Minecraft mc=Minecraft.getInstance(); if(mc.player==null) return false;
-        if(action.equals("attack") && System.nanoTime()-lastAttack<150_000_000L) return true;
-        if(action.equals("attack")) lastAttack=System.nanoTime();
+        // "attack" is a click, "attack_hold" the button kept down: both keep a block breaking, only a click hits an entity.
+        boolean attack=action.equals("attack") || action.equals("attack_hold");
+        if(attack && System.nanoTime()-lastAttack<150_000_000L) return true;
+        if(attack) lastAttack=System.nanoTime();
         Pose pose=primaryPose;
         MmlfLog.debug("input","request",Map.of("action",action,"cameraId",pose.cameraId(),"dimension",pose.dimension()));
         var item=RemoteItems.held(mc.player.getMainHandItem());
@@ -638,6 +641,13 @@ public final class BridgeCore {
         Vec3 start=new Vec3(p.x(),p.y(),p.z());
         Vec3 end=start.add(Vec3.directionFromRotation(p.pitch(),p.yaw()).scale(request.reach()));
         var hit=mc.level.clip(new net.minecraft.world.level.ClipContext(start,end,net.minecraft.world.level.ClipContext.Block.OUTLINE,net.minecraft.world.level.ClipContext.Fluid.NONE,mc.player));
+        // An entity of this runtime in front of the nearest block is what the ray hits here.
+        var entityHit=RemoteEntities.pick(mc,start,Vec3.directionFromRotation(p.pitch(),p.yaw()),request.reach(),primary);
+        if(entityHit!=null && (hit.getType()==net.minecraft.world.phys.HitResult.Type.MISS || start.distanceTo(entityHit.getLocation())<start.distanceTo(hit.getLocation()))) {
+            var entity=entityHit.getEntity(); Vec3 at=entityHit.getLocation(); var block=entity.blockPosition();
+            link.send("ray_hit","coordinator",new RayHit(request.actionId(),null,0,start.distanceTo(at),block.getX(),block.getY(),block.getZ(),"UP",at.x,at.y,at.z,false,entity.getUUID().toString()));
+            return;
+        }
         if(hit.getType()==net.minecraft.world.phys.HitResult.Type.MISS) { sendMiss(request); return; }
         ObjectState o=Boundary.local(p.dimension(),hit.getBlockPos());
         if(o==null && !primary) {
@@ -659,6 +669,7 @@ public final class BridgeCore {
     private static void interact(Interaction action) {
         Minecraft mc=Minecraft.getInstance(); RayHit hit=action.hit();
         if(!handledActions.firstTime(action.actionId())) { MmlfLog.warn("interaction","duplicate_ignored",Map.of("actionId",action.actionId())); return; }
+        if(hit.entityHit()) { interactEntity(mc,action); return; }
         var pos=new net.minecraft.core.BlockPos(hit.x(),hit.y(),hit.z()); ObjectState current=Boundary.local(action.pose().dimension(),pos);
         if(mc.getSingleplayerServer()==null || mc.player==null || mc.level==null) { result(action,false,"FAIL","runtime_not_ready"); return; }
         if(hit.objectId()!=null && (current==null || !current.id().equals(hit.objectId()) || current.revision()!=hit.revision())) { result(action,false,"FAIL","stale_target"); return; }
@@ -669,7 +680,7 @@ public final class BridgeCore {
         // Every use, including placing this runtime's item on a vanilla surface, goes through the native client path with
         // the mirrored stack itself: the use consumes from the real inventory, never from a stand-in copy.
         if("use".equals(action.action())) { useNative(mc,action,pos,current); return; }
-        if("attack".equals(action.action())) { mine(mc,action,pos,current); return; }
+        if("attack".equals(action.action()) || "attack_hold".equals(action.action())) { mine(mc,action,pos,current); return; }
         var server=mc.getSingleplayerServer();
         server.execute(()->{
             if(server.getPlayerList().getPlayers().isEmpty()) { result(action,false,"FAIL","no_player"); return; }
@@ -681,6 +692,42 @@ public final class BridgeCore {
             if("pick".equals(action.action())) {RemoteItems.pick(player,pos);result(action,true,"PICK",null);return;}
             result(action,false,"FAIL","unsupported_action");
         });
+    }
+    /**
+     * Attacks or uses an entity the way this runtime's own player would: the client game mode sends the native packet and
+     * the integrated server validates and executes it, so damage, knockback, sounds, trades and mod logic are the
+     * entity's own. A held attack never hits an entity again; vanilla attacks entities only on a click.
+     */
+    private static void interactEntity(Minecraft mc,Interaction action) {
+        if(mc.player==null || mc.level==null || mc.gameMode==null) { result(action,false,"FAIL","runtime_not_ready"); return; }
+        if(!mc.level.dimension().location().toString().equals(action.pose().dimension())) { result(action,false,"FAIL","dimension_mismatch"); return; }
+        var entity=RemoteEntities.find(mc,action.hit().entity());
+        if(entity==null || !entity.isAlive()) { result(action,false,"FAIL","stale_target"); return; }
+        if(!RemoteEntities.interactive(entity,primary)) { result(action,false,"FAIL","unowned_target"); return; }
+        var player=mc.player;
+        if(action.selectedSlot()>=0 && action.selectedSlot()<9) player.getInventory().selected=action.selectedSlot();
+        var hand=Messages.OFF_HAND.equals(action.hand()) ? net.minecraft.world.InteractionHand.OFF_HAND : net.minecraft.world.InteractionHand.MAIN_HAND;
+        String type=String.valueOf(net.minecraft.core.registries.BuiltInRegistries.ENTITY_TYPE.getKey(entity.getType()));
+        switch(String.valueOf(action.action())) {
+            case "attack" -> {
+                mc.gameMode.attack(player,entity);
+                player.swing(net.minecraft.world.InteractionHand.MAIN_HAND);
+                MmlfLog.info("interaction","native_result",Map.of("actionId",action.actionId(),"action","attack","target","entity","entity",type));
+                result(action,true,"ATTACK",null);
+            }
+            case "attack_hold" -> result(action,false,"HELD",null);
+            case "use" -> {
+                if(!primary) GuiHost.noteInteraction(action.actionId());
+                var at=new Vec3(action.hit().hitX(),action.hit().hitY(),action.hit().hitZ());
+                var outcome=mc.gameMode.interactAt(player,entity,new net.minecraft.world.phys.EntityHitResult(entity,at),hand);
+                if(!outcome.consumesAction()) outcome=mc.gameMode.interact(player,entity,hand);
+                if(outcome.shouldSwing()) player.swing(hand);
+                MmlfLog.info("interaction","native_result",Map.of("actionId",action.actionId(),"action","use","target","entity","entity",type,"result",outcome.name(),
+                    "screen",mc.screen==null?"none":mc.screen.getClass().getName()));
+                result(action,outcome.consumesAction(),outcome.name(),null);
+            }
+            default -> result(action,false,"FAIL","unsupported_action");
+        }
     }
     /**
      * Uses a block the way this runtime's own player would: the client game mode runs the client-side logic (where some
@@ -808,6 +855,8 @@ public final class BridgeCore {
         MmlfLog.debug("interaction","result",Map.of("actionId",result.actionId(),"owner",source,"success",result.success(),"result",String.valueOf(result.result()),"reason",String.valueOf(result.reason())));
         if(mc.player==null) return;
         if(result.success()) mc.player.swing(net.minecraft.world.InteractionHand.MAIN_HAND);
+        // An owner attacked an entity for this player: the cooldown starts over as after a native attack (crosshair indicator).
+        if(result.success() && "ATTACK".equals(result.result())) mc.player.resetAttackStrengthTicker();
         else if(result.reason()!=null) mc.gui.setOverlayMessage(net.minecraft.network.chat.Component.literal("MMLF: "+source+" "+result.reason()),false);
     }
     private static boolean sameCamera(Pose a,Pose b) {
@@ -933,12 +982,7 @@ public final class BridgeCore {
             }
             // Captured section meshes do not yet cover Sodium, block entities or animated geometry.
             // Keep the complete native frame until all content has a safe unified rendering path.
-            boolean unifiedPreview=Experiments.UNIFIED_PREVIEW && dev.mmlf.bridge.render.GeometryLayer.remoteReplayReady(frame.runtime(),frame.pose().dimension());
-            if(unifiedPreview && !unifiedPreviewReported) {
-                unifiedPreviewReported=true;
-                MmlfLog.info("render.submission","unified_preview",Map.of("renderer",frame.runtime(),"window",runtimeId()));
-            }
-            RemoteCompositor.draw(frame,pixels,current,target.width,target.height,unifiedPreview);
+            RemoteCompositor.draw(frame,pixels,current,target.width,target.height);
             if(!compositeReported) {compositeReported=true;System.out.println("MMLF COMPOSITE READY remote="+frame.runtime()+" mode=gpu");}
         }
     }

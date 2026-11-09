@@ -15,12 +15,21 @@ import net.minecraft.core.Direction;
 import net.minecraft.core.SectionPos;
 import net.minecraft.resources.ResourceLocation;
 
-/** Immutable batches for terrain model compilation. Published only after a complete snapshot is built. */
+/**
+ * Immutable batches for terrain model compilation, published only after a complete snapshot is built. Sections are
+ * rebuilt and marked dirty only when their received layers, their stand-in cells or the reserved atlas area change, so
+ * one remote block change recompiles one host section.
+ */
 public final class TerrainMeshes {
     private TerrainMeshes() {}
     private static final ResourceLocation RESERVE=ResourceLocation.fromNamespaceAndPath("mmlf_bridge","remote_reserve");
-    private record State(long version,Map<Long,Map<String,List<BakedQuad>>> cells,Set<Long> sections) {}
-    private static volatile State state=new State(0,Map.of(),Set.of());
+    /** Where the received atlas lands in the local one; any change invalidates every converted quad. */
+    private record AtlasKey(float u0,float v0,float u1,float v1,int spriteWidth,int spriteHeight,int width,int height) {}
+    /** One section's inputs and converted quads; {@code version} is the state version in which its content last changed. */
+    private record Section(List<RenderSectionStore.Layer> layers,List<TerrainQuadPartition.Cell> occupied,AtlasKey atlas,
+                           Map<Long,Map<String,List<BakedQuad>>> cells,long version) {}
+    private record State(long version,Map<Long,Section> sections) {}
+    private static volatile State state=new State(0,Map.of());
     private static volatile boolean dirty;
     public static void invalidate() { dirty=true; }
     static void refresh(Minecraft mc,RenderSectionStore.Snapshot snapshot,int width,int height) {
@@ -28,38 +37,52 @@ public final class TerrainMeshes {
         dirty=false;
         if(!TerrainAtlas.ready || !rebuild(mc,snapshot,width,height)) clear();
     }
-    public static Map<String,List<BakedQuad>> at(BlockPos pos) { return state.cells().getOrDefault(pos.asLong(),Map.of()); }
+    public static Map<String,List<BakedQuad>> at(BlockPos pos) {
+        Section section=state.sections().get(SectionPos.asLong(SectionPos.blockToSectionCoord(pos.getX()),SectionPos.blockToSectionCoord(pos.getY()),SectionPos.blockToSectionCoord(pos.getZ())));
+        return section==null ? Map.of() : section.cells().getOrDefault(pos.asLong(),Map.of());
+    }
+    /** Section -> content version whose compile result the host has uploaded. */
     private static final java.util.concurrent.ConcurrentMap<Long,Long> uploaded=new java.util.concurrent.ConcurrentHashMap<>();
     private static final Map<Object,Upload> sodiumOutputs=Collections.synchronizedMap(new WeakHashMap<>());
     private record Upload(long section,long version) {}
+    /** Taken by a compile task before it reads {@link #at}; passed back to {@link #uploaded} with its result. */
     public static long version() { return state.version(); }
-    public static boolean hasSection(long section) { State s=state; return s.sections().contains(section) && Objects.equals(uploaded.get(section),s.version()); }
-    public static void uploaded(long section,long version) {
-        if(state.version()==version && state.sections().contains(section) && !Objects.equals(uploaded.put(section,version),version))
-            dev.mmlf.common.MmlfLog.info("render.submission","terrain_uploaded",Map.of("section",section,"version",version));
+    public static boolean hasSection(long section) { Section s=state.sections().get(section); return s!=null && Objects.equals(uploaded.get(section),s.version()); }
+    /** A compile that started at {@code compiledAt} holds the section's current content when that content is not newer. */
+    public static void uploaded(long section,long compiledAt) {
+        Section s=state.sections().get(section);
+        if(s!=null && compiledAt>=s.version() && !Objects.equals(uploaded.put(section,s.version()),s.version()))
+            dev.mmlf.common.MmlfLog.info("render.submission","terrain_uploaded",Map.of("section",section,"version",s.version()));
     }
     public static void sodiumOutput(Object output,long section,long version) { if(output!=null) sodiumOutputs.put(output,new Upload(section,version)); }
     public static void sodiumUploaded(Collection<?> outputs) { for(Object output:outputs) { Upload u=sodiumOutputs.remove(output); if(u!=null) uploaded(u.section(),u.version()); } }
     public static void clear() {
-        var old=state.sections(); state=new State(state.version()+1,Map.of(),Set.of()); uploaded.clear();
+        var old=state.sections().keySet(); state=new State(state.version()+1,Map.of()); uploaded.clear();
         var mc=Minecraft.getInstance();
         if(mc.level!=null) for(long key:old) mc.levelRenderer.setSectionDirty(SectionPos.x(key),SectionPos.y(key),SectionPos.z(key));
     }
 
     /** Render thread; returns false without changing the published batches when the atlas cannot fit. */
     static boolean rebuild(Minecraft mc,RenderSectionStore.Snapshot snapshot,int width,int height) {
+        long started=System.nanoTime();
         ClientLevel level=mc.level;
         if(level==null) return false;
         var texture=mc.getTextureManager().getTexture(TextureAtlas.LOCATION_BLOCKS);
         if(!(texture instanceof TextureAtlas atlas)) return false;
         var sprite=((dev.mmlf.bridge.mixin.TextureAtlasAccessor)atlas).mmlf$sprites().get(RESERVE);
         if(sprite==null || width>sprite.contents().width() || height>sprite.contents().height()) return false;
-        var out=new HashMap<Long,Map<String,List<BakedQuad>>>();
-        var complete=new HashSet<Long>();
+        var atlasKey=new AtlasKey(sprite.getU0(),sprite.getV0(),sprite.getU1(),sprite.getV1(),sprite.contents().width(),sprite.contents().height(),width,height);
+        State previous=state;
+        long version=previous.version()+1;
+        // Producers in a fixed order, so an unchanged section compares equal to its previous layers.
         var grouped=new HashMap<Long,List<RenderSectionStore.Layer>>();
-        for(var e:snapshot.sections().entrySet()) grouped.computeIfAbsent(e.getKey().section(),k->new ArrayList<>()).addAll(e.getValue().layers());
-        for(var section:grouped.entrySet()) {
-            long key=section.getKey(); int sx=SectionPos.x(key),sy=SectionPos.y(key),sz=SectionPos.z(key);
+        snapshot.sections().entrySet().stream().sorted(Comparator.comparing(e->e.getKey().producer()))
+                .forEach(e->grouped.computeIfAbsent(e.getKey().section(),k->new ArrayList<>()).addAll(e.getValue().layers()));
+        var next=new HashMap<Long,Section>();
+        var changed=new HashSet<Long>();
+        int reused=0;
+        for(var entry:grouped.entrySet()) {
+            long key=entry.getKey(); int sx=SectionPos.x(key),sy=SectionPos.y(key),sz=SectionPos.z(key);
             if(!level.hasChunk(sx,sz)) continue;
             int ox=sx*16,oy=sy*16,oz=sz*16;
             var occupied=new ArrayList<TerrainQuadPartition.Cell>();
@@ -67,26 +90,36 @@ public final class TerrainMeshes {
             for(int y=0;y<16;y++) for(int z=0;z<16;z++) for(int x=0;x<16;x++)
                 if(StandInBlock.is(level.getBlockState(pos.set(ox+x,oy+y,oz+z)))) occupied.add(new TerrainQuadPartition.Cell(x,y,z));
             if(occupied.isEmpty()) continue;
-            boolean supported=section.getValue().stream().allMatch(l->l.vertexFormat().equals("minecraft:block-v1") && l.vertexStride()==32
+            var layers=entry.getValue();
+            Section old=previous.sections().get(key);
+            if(old!=null && old.atlas().equals(atlasKey) && old.occupied().equals(occupied) && RenderSectionStore.sameLayers(old.layers(),layers)) {
+                next.put(key,old); reused++; continue;
+            }
+            boolean supported=layers.stream().allMatch(l->l.vertexFormat().equals("minecraft:block-v1") && l.vertexStride()==32
                 && l.topology().equals("quads") && l.material().equals("minecraft:block-atlas") && l.meshId().isEmpty()
                 && l.indices().length==0 && Set.of("solid","cutout_mipped","cutout","translucent","tripwire").contains(l.renderType()));
             if(!supported) continue;
             var local=new HashMap<Long,Map<String,List<BakedQuad>>>();
             try {
-                for(var layer:section.getValue()) for(var e:TerrainQuadPartition.partition(layer.vertices(),occupied).entrySet()) {
+                for(var layer:layers) for(var e:TerrainQuadPartition.partition(layer.vertices(),occupied).entrySet()) {
                     var c=e.getKey(); long block=BlockPos.asLong(ox+c.x(),oy+c.y(),oz+c.z());
                     var quads=local.computeIfAbsent(block,k->new HashMap<>()).computeIfAbsent(layer.renderType(),k->new ArrayList<>());
                     for(byte[] quad:e.getValue()) quads.add(convert(quad,c,sprite,width,height));
                 }
             } catch(IllegalArgumentException e) { continue; }
-            out.putAll(local); complete.add(key);
+            var frozen=new HashMap<Long,Map<String,List<BakedQuad>>>();
+            local.forEach((block,passes)->{ var p=new HashMap<String,List<BakedQuad>>(); passes.forEach((pass,quads)->p.put(pass,List.copyOf(quads))); frozen.put(block,Map.copyOf(p)); });
+            next.put(key,new Section(List.copyOf(layers),List.copyOf(occupied),atlasKey,Map.copyOf(frozen),version));
+            changed.add(key);
         }
-        var frozen=new HashMap<Long,Map<String,List<BakedQuad>>>();
-        out.forEach((pos,passes)->{ var p=new HashMap<String,List<BakedQuad>>(); passes.forEach((pass,quads)->p.put(pass,List.copyOf(quads))); frozen.put(pos,Map.copyOf(p)); });
-        var old=state.sections();
-        state=new State(state.version()+1,Map.copyOf(frozen),Set.copyOf(complete));
-        dev.mmlf.common.MmlfLog.info("render.submission","terrain_meshes",Map.of("sections",complete.size(),"cells",frozen.size(),"version",state.version()));
-        var dirty=new HashSet<>(old); dirty.addAll(complete);
+        var removed=new HashSet<>(previous.sections().keySet()); removed.removeAll(next.keySet());
+        if(changed.isEmpty() && removed.isEmpty()) return true;
+        state=new State(version,Map.copyOf(next));
+        for(long key:removed) uploaded.remove(key);
+        int cells=next.values().stream().mapToInt(s->s.cells().size()).sum();
+        dev.mmlf.common.MmlfLog.info("render.submission","terrain_meshes",Map.of("sections",next.size(),"cells",cells,"version",version,
+                "changed",changed.size(),"removed",removed.size(),"reused",reused,"rebuildMicros",(System.nanoTime()-started)/1000));
+        var dirty=new HashSet<>(removed); dirty.addAll(changed);
         for(long key:dirty) mc.levelRenderer.setSectionDirty(SectionPos.x(key),SectionPos.y(key),SectionPos.z(key));
         return true;
     }

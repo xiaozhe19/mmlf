@@ -68,8 +68,4 @@ class RuntimeLayerTest {
         assertFalse(rewritten.contains("\"logs/"));
         assertTrue(rewritten.contains(dir.resolve("game").resolve("logs").toAbsolutePath().toString().replace('\\','/')+"/latest.log"));
     }
-
-    @Test void processAndInJvmBackendsAreSelectable() {
-        assertEquals(RuntimeManager.IN_JVM,RuntimeManager.configuredBackend());
-    }
 }

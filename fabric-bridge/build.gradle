@@ -15,7 +15,6 @@ dependencies {
     include implementation(project(':common'))
     include implementation(project(':coordinator'))
     include implementation(project(':launcher'))
-    include implementation('org.java-websocket:Java-WebSocket:1.6.0')
 }
 sourceSets.main.java.srcDir '../bridge-common/src/main/java'
 sourceSets.main.resources.srcDir '../bridge-common/src/main/resources'
@@ -47,8 +46,6 @@ tasks.register('stageHostMods', JavaExec) {
         file(System.getenv('MMLF_GAME_ROOT') ? System.getenv('MMLF_GAME_ROOT') + '/' + runtimeId + '/mods' : 'run/mods').absolutePath
 }
 tasks.named('runClient') { dependsOn ':fabric-test-mod:classes', 'stageHostMods' }
-// Only the jar carries the session manager: development runs host sessions through Gradle instead.
-tasks.named('jar') { from(project(':launcher').tasks.named('managerJar')) { into 'META-INF/mmlf'; rename { 'mmlf-manager.jar' } } }
 
 
 

@@ -2,7 +2,7 @@ package dev.mmlf.common;
 
 /**
  * The channel between one runtime and the Coordinator: text frames only, so the protocol above it ({@link Wire},
- * {@link ReliableLink}) is the same whether the Coordinator is in another process or in this JVM.
+ * {@link ReliableLink}) stays independent of how frames cross between class loaders.
  */
 public interface Transport {
     interface Listener {
@@ -18,12 +18,9 @@ public interface Transport {
     void send(String frame);
     void close();
 
-    /** A fresh transport for the endpoint the session names: {@code ws://127.0.0.1:port} or {@code injvm://local}. */
+    /** A fresh transport to the session's in-JVM Coordinator. */
     static Transport forSession(Session session) {
-        return switch(java.net.URI.create(session.uri()).getScheme()) {
-            case "ws" -> new WebSocketTransport(java.net.URI.create(session.uri()));
-            case "injvm" -> new InJvmTransport(session.identity());
-            default -> throw new IllegalArgumentException("unsupported MMLF endpoint "+session.uri());
-        };
+        if(!session.inJvm()) throw new IllegalArgumentException("unsupported MMLF endpoint "+session.uri());
+        return new InJvmTransport(session.identity());
     }
 }

@@ -56,10 +56,12 @@ public final class DynamicCapture {
     /**
      * The particles this runtime owns: those of its mods' particle classes, and block particles (breaking, hitting),
      * which in this runtime's world come only from its own blocks being broken, since it never breaks the render
-     * host's. Other vanilla particles (weather, ambience) belong to the world the render host shows itself.
+     * host's; and vanilla particles that appeared on its own entities. Other vanilla particles (weather, ambience)
+     * belong to the world the render host shows itself.
      */
     private static boolean ownedParticle(net.minecraft.client.particle.Particle particle) {
-        return particle instanceof net.minecraft.client.particle.TerrainParticle || !particle.getClass().getName().startsWith("net.minecraft.");
+        return particle instanceof net.minecraft.client.particle.TerrainParticle || !particle.getClass().getName().startsWith("net.minecraft.")
+            || dev.mmlf.bridge.RemoteEntities.entityParticle(particle);
     }
     private static void recordParticles(Minecraft mc,Camera camera,float partial) {
         var all=((dev.mmlf.bridge.mixin.ParticleEngineAccessor)mc.particleEngine).mmlf$particles();
@@ -101,8 +103,9 @@ public final class DynamicCapture {
     public static boolean capturing() { return capturing; }
 
     /** The owner rule for dynamic content, the same namespace rule as for blocks. Players belong to their own runtime. */
-    static boolean owned(Entity entity) {
+    public static boolean owned(Entity entity) {
         if(entity instanceof RemoteProxy || entity instanceof Player) return false;
+        if(dev.mmlf.bridge.RemoteEntities.claimed(entity.getUUID())) return true;
         if(!BuiltInRegistries.ENTITY_TYPE.getKey(entity.getType()).getNamespace().equals("minecraft")) return true;
         // Vanilla carriers of this runtime's content.
         if(entity instanceof ItemEntity item) return foreign(BuiltInRegistries.ITEM.getKey(item.getItem().getItem()).getNamespace());

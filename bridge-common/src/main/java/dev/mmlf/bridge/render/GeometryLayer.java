@@ -94,36 +94,12 @@ public final class GeometryLayer {
  private static long atlasGeneration=-1;
  private static int atlasWidth,atlasHeight;
  private static boolean replayReported;
- private record ReplaySignal(String runtime,String dimension,long atNanos) {}
- private static volatile ReplaySignal remoteReplay;
- private static long lastReplaySignal;
 
- /** Read once: renderHost() runs for every frame and first-person render. */
- private static final String REQUESTED_HOST=System.getProperty("mmlf.renderHost",System.getenv().getOrDefault("MMLF_RENDER_HOST","primary")).toLowerCase(Locale.ROOT);
  /** Compile results rejected while a scene reset was pending; compiled again once the scene is current. */
  private static final Map<Long,Object> pendingRecompile=new java.util.concurrent.ConcurrentHashMap<>();
- /** Explicit experimental override; the normal configuration remains on the window owner. */
- public static String renderHost() {
-  String primary=BridgeCore.primaryId(); if(primary==null) return null;
-  if(REQUESTED_HOST.equals("auto")) {
-   // Automatic switching is opt-in while scene coverage and presentation remain experimental.
-   if(!Experiments.UNIFIED_PREVIEW) return primary;
-   // The window owner decides and announces the host, so both runtimes agree and stale reports keep the last choice.
-   String host=RenderShaderCapabilities.autoHost(); return host==null?primary:host;
-  }
-  try { return RenderHostPolicy.configured(primary,REQUESTED_HOST); }
-  catch(IllegalArgumentException e) { MmlfLog.sampled("render.submission","invalid_render_host",5000,Map.of("requested",REQUESTED_HOST)); return primary; }
- }
- public static boolean isRenderHost() { return Objects.equals(renderHost(),BridgeCore.runtimeId()); }
- public static void receiveReplaySignal(String runtime,String dimension) {
-  if(BridgeCore.isPrimary() && Objects.equals(runtime,renderHost()) && dimension!=null)
-   remoteReplay=new ReplaySignal(runtime,dimension,System.nanoTime());
- }
- public static boolean remoteReplayReady(String runtime,String dimension) {
-  var signal=remoteReplay;
-  return signal!=null && !isRenderHost() && Objects.equals(runtime,renderHost()) && runtime.equals(signal.runtime())
-   && dimension.equals(signal.dimension()) && System.nanoTime()-signal.atNanos()<2_500_000_000L;
- }
+ /** The window owner draws the whole scene; the other runtime only submits. */
+ public static String renderHost() { return BridgeCore.primaryId(); }
+ public static boolean isRenderHost() { return BridgeCore.isPrimary(); }
  private static String background() { return RenderHostPolicy.other(renderHost()); }
  /** Render host: whether the submitter's dynamic content currently arrives, so the things it draws may be left to it. */
  public static boolean ownerSubmitting() {
@@ -255,7 +231,7 @@ public final class GeometryLayer {
   acceptedGeneration=acceptedRevision=-1;
   remoteSnapshot=null;
   TerrainMeshes.clear(); TerrainAtlas.ready=false;
-  remoteReplay=null; replayReported=false; lastReplaySignal=0;
+  replayReported=false;
   cachedSections.clear(); staticByPass.clear(); lastDrawNanos=lastDynamicNanos=0;
   dynamicDraws=List.of(); dynamicFrame=dynamicGeneration=-1; dynamicCamera=0; dynamicTypes.clear();
   var manager=mc.getTextureManager();
@@ -580,12 +556,6 @@ public final class GeometryLayer {
   if(!replayReported && meshes+dynamicDraws.size()>0) {
    replayReported=true;
    MmlfLog.info("render.submission","geometry_replay",Map.of("runtime",background(),"sections",meshes,"dynamicBatches",dynamicDraws.size(),"path","entity_proxy"));
-  }
-  var mc=Minecraft.getInstance();
-  if(Experiments.UNIFIED_PREVIEW && !BridgeCore.isPrimary() && now-lastReplaySignal>1_000_000_000L && mc.level!=null) {
-   lastReplaySignal=now;
-   BridgeCore.send("event",BridgeCore.primaryId(),new dev.mmlf.common.Messages.Event("mmlf:render_replay_ready",
-    Map.of("dimension",mc.level.dimension().location().toString())));
   }
  }
 

@@ -23,7 +23,7 @@ public abstract class MinecraftMixin {
   // A background's own attack key is never down; its tick would stop the mining the primary is driving.
   if(BridgeCore.miningForPrimary()) { ci.cancel(); return; }
   if(!attacking) BridgeCore.attackReleased();
-  if(attacking && BridgeCore.requestInteraction("attack")) ci.cancel();
+  if(attacking && BridgeCore.requestInteraction("attack_hold")) ci.cancel();
  }
  /** Hosted in-JVM runtimes end before this game releases its window and GL resources. */
  @Inject(method="destroy",at=@At("HEAD"))

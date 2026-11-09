@@ -21,7 +21,7 @@ class InJvmLifecycleTest {
 
     @BeforeEach void session() throws Exception {
         System.setProperty("fabric.test.hostOnly","host-value");
-        host=SessionHost.create(dir.resolve("runtime"),null,"fabric",false,SessionHost.Endpoint.IN_JVM);
+        host=SessionHost.create(dir.resolve("runtime"),null,"fabric",false);
         manager=new RuntimeManager(host,new InJvmBackend(host));
     }
     @AfterEach void end() {

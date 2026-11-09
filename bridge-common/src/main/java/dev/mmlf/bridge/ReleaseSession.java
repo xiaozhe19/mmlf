@@ -12,17 +12,15 @@ import java.util.concurrent.TimeUnit;
 
 /**
  * Release builds: the client a launcher started becomes the primary and starts the other runtime from the same
- * launcher's installed versions. By default it does so inside its own JVM ({@link #hostInJvm}); with
- * {@code -Dmmlf.backend=process} its mod jar's session manager is started beside the game and starts it as a process.
+ * launcher's installed versions, inside its own JVM ({@link #hostInJvm}).
  */
 final class ReleaseSession {
-    static final String MANAGER="/META-INF/mmlf/mmlf-manager.jar";
     /** {@code minecraft.launcher.brand} values of the launchers whose installed versions the manager can start. */
     private static final List<String> LAUNCHERS=List.of("minecraft-launcher","hmcl","pcl");
     private ReleaseSession() {}
 
-    /** Only release jars carry the manager; a development client without a session stays a plain game. */
-    static boolean bundled() { return ReleaseSession.class.getResource(MANAGER)!=null; }
+    /** Release jars carry the session launcher; a development client without a session stays a plain game. */
+    static boolean bundled() { return ReleaseSession.class.getResource("/dev/mmlf/launcher/ReleaseRemote.class")!=null; }
 
     /** Started once the game is up, because the account the background plays with is only known then. */
     static CompletableFuture<Path> start(Minecraft mc,String runtime) {
@@ -34,90 +32,38 @@ final class ReleaseSession {
         try { root=minecraftRoot(mc.gameDirectory.toPath()); }
         catch(IllegalStateException e) { return CompletableFuture.failedFuture(e); }
         var user=mc.getUser();
-        var request=new LinkedHashMap<String,Object>();
-        request.put("primary",runtime);
-        request.put("minecraftVersion",net.minecraft.SharedConstants.getCurrentVersion().getName());
-        request.put("minecraftRoot",root.toString());
-        request.put("gameDirectory",mc.gameDirectory.toPath().toAbsolutePath().normalize().toString());
-        request.put("launcherName",brand);
-        request.put("launcherVersion",System.getProperty("minecraft.launcher.version","unknown"));
-        request.put("account",Map.of("name",user.getName(),"uuid",user.getProfileId().toString().replace("-",""),"accessToken",user.getAccessToken(),
-            "type",user.getType().getName(),"xuid",user.getXuid().orElse(""),"clientId",user.getClientId().orElse("")));
-        request.put("hostPid",ProcessHandle.current().pid());
-        request.put("maxMemoryMb",Runtime.getRuntime().maxMemory()/(1024*1024));
-        Path gameDirectory=Path.of(request.get("gameDirectory").toString());
-        if(dev.mmlf.launcher.runtime.RuntimeManager.configuredBackend().equals(dev.mmlf.launcher.runtime.RuntimeManager.IN_JVM)) {
-            var account=new dev.mmlf.launcher.VersionProfile.Account(user.getName(),user.getProfileId().toString().replace("-",""),user.getAccessToken(),
-                user.getType().getName(),user.getXuid().orElse(""),user.getClientId().orElse(""));
-            String version=request.get("minecraftVersion").toString();
-            Map<String,String> launcher=Map.of("name",brand,"version",request.get("launcherVersion").toString());
-            return CompletableFuture.supplyAsync(()->{
-                try { return hostInJvm(runtime,version,root,gameDirectory,account,launcher); }
-                catch(Exception e) { throw new java.util.concurrent.CompletionException(e); }
-            });
-        }
+        Path gameDirectory=mc.gameDirectory.toPath().toAbsolutePath().normalize();
+        var account=new dev.mmlf.launcher.VersionProfile.Account(user.getName(),user.getProfileId().toString().replace("-",""),user.getAccessToken(),
+            user.getType().getName(),user.getXuid().orElse(""),user.getClientId().orElse(""));
+        String version=net.minecraft.SharedConstants.getCurrentVersion().getName();
+        Map<String,String> launcher=Map.of("name",brand,"version",System.getProperty("minecraft.launcher.version","unknown"));
         return CompletableFuture.supplyAsync(()->{
-            try { return run(gameDirectory,Wire.JSON.toJson(request)); }
-            catch(IOException e) { throw new UncheckedIOException(e); }
+            try { return hostInJvm(runtime,version,root,gameDirectory,account,launcher); }
+            catch(Exception e) { throw new java.util.concurrent.CompletionException(e); }
         });
     }
 
     /**
-     * In-JVM release session (the default backend): this game hosts the session itself and starts the other loader's
-     * installed version inside its own JVM, as development runs do; no manager process. The other runtime's staging is
-     * the manager's ({@link dev.mmlf.launcher.ReleaseRemote}).
+     * In-JVM release session: this game hosts the session itself and starts the other loader's installed version
+     * inside its own JVM, as development runs do ({@link dev.mmlf.launcher.ReleaseRemote} stages it).
      */
     private static Path hostInJvm(String primary,String minecraftVersion,Path root,Path gameDirectory,dev.mmlf.launcher.VersionProfile.Account account,Map<String,String> launcher) throws Exception {
         long started=System.currentTimeMillis();
         var prepared=dev.mmlf.launcher.ReleaseRemote.prepare(root,primary,minecraftVersion,gameDirectory,(f,t)->SessionStatus.managerStep(f.floatValue(),t));
         Path sessions=gameDirectory.resolve("mmlf").resolve("sessions");
-        dev.mmlf.launcher.Manager.removeOldSessions(sessions);
-        var host=dev.mmlf.launcher.SessionHost.create(sessions,null,primary,false,dev.mmlf.launcher.SessionHost.Endpoint.IN_JVM);
+        dev.mmlf.launcher.ReleaseSupport.removeOldSessions(sessions);
+        var host=dev.mmlf.launcher.SessionHost.create(sessions,null,primary,false);
         var manager=new dev.mmlf.launcher.runtime.RuntimeManager(host,new dev.mmlf.launcher.runtime.InJvmBackend(host));
         try {
             SessionBootstrap.adopt(manager);
             host.suppressEarlyWindow(prepared.remote(),prepared.game());
-            dev.mmlf.launcher.Manager.reportExit(manager,prepared.remote(),prepared.game(),started);
+            dev.mmlf.launcher.ReleaseSupport.reportExit(manager,prepared.remote(),prepared.game(),started);
             SessionStatus.managerStep(0.9f,"启动 "+prepared.profile().id());
             MmlfLog.info("launcher","remote_version",Map.of("runtime",prepared.remote(),"version",prepared.profile().id(),"loaderVersion",prepared.profile().loaderVersion(),
                 "mods",prepared.mods().size(),"instance",prepared.instance().toString(),"backend","injvm"));
             manager.start(dev.mmlf.launcher.ReleaseRemote.inJvm(prepared,host.directory(),account,launcher));
         } catch(Exception e) { manager.close(); throw e; }
         return host.sessionFile();
-    }
-
-    private static Path run(Path gameDirectory,String request) throws IOException {
-        Path directory=gameDirectory.resolve("mmlf");
-        Files.createDirectories(directory);
-        Path jar=directory.resolve("mmlf-manager.jar");
-        try(InputStream in=ReleaseSession.class.getResourceAsStream(MANAGER)) { Files.copy(in,jar,StandardCopyOption.REPLACE_EXISTING); }
-        boolean windows=System.getProperty("os.name").toLowerCase(Locale.ROOT).contains("win");
-        // javaw: a console java started from the windowless game would open a console window.
-        Path java=Path.of(System.getProperty("java.home"),"bin",windows?"javaw.exe":"java");
-        Process manager=new ProcessBuilder(java.toString(),"-Dmmlf.logLevel="+MmlfLog.configuredLevel(),"-cp",jar.toString(),"dev.mmlf.launcher.Manager")
-            .directory(directory.toFile()).redirectError(directory.resolve("manager-error.log").toFile()).start();
-        try(Writer in=new OutputStreamWriter(manager.getOutputStream(),StandardCharsets.UTF_8)) { in.write(request); in.write('\n'); }
-        BufferedReader out=new BufferedReader(new InputStreamReader(manager.getInputStream(),StandardCharsets.UTF_8));
-        String reply;
-        while((reply=out.readLine())!=null) {
-            if(reply.startsWith(PROGRESS)) { progress(reply.substring(PROGRESS.length())); continue; }
-            if(reply.startsWith("MMLF-")) break;
-        }
-        if(reply!=null && reply.startsWith("MMLF-SESSION ")) {
-            MmlfLog.info("launcher","manager_started",Map.of("pid",manager.pid()));
-            return Path.of(reply.substring("MMLF-SESSION ".length()));
-        }
-        if(reply!=null && reply.startsWith("MMLF-ERROR ")) throw new IllegalStateException(reply.substring("MMLF-ERROR ".length()));
-        try { manager.waitFor(5,TimeUnit.SECONDS); } catch(InterruptedException e) { Thread.currentThread().interrupt(); }
-        throw new IllegalStateException("MMLF 会话管理器没有正常启动，详见 "+directory.resolve("manager-error.log"));
-    }
-
-    private static final String PROGRESS="MMLF-PROGRESS ";
-    /** {@code <fraction> <text>} from the manager, shown while it prepares the remote. */
-    private static void progress(String line) {
-        int space=line.indexOf(' ');
-        try { SessionStatus.managerStep(Float.parseFloat(space<0?line:line.substring(0,space)),space<0?"":line.substring(space+1)); }
-        catch(NumberFormatException ignored) { }
     }
 
     /**

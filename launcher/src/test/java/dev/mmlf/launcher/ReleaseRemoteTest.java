@@ -78,7 +78,6 @@ class ReleaseRemoteTest {
 
         RuntimeSpec spec=ReleaseRemote.inJvm(prepared,root.resolve("session"),ACCOUNT,LAUNCHER);
         assertEquals("neoforge",spec.id()); assertEquals("neoforge",spec.loader());
-        assertNull(spec.command());
         JavaLaunch launch=spec.java();
         assertEquals("cpw.mods.bootstraplauncher.BootstrapLauncher",launch.mainClass());
         Path libraries=root.resolve("libraries");
@@ -100,12 +99,12 @@ class ReleaseRemoteTest {
         assertEquals("Steve",launch.arg("--username"));
         assertEquals(root.resolve("session/neoforge.log"),spec.log());
         assertEquals(prepared.game(),spec.gameDirectory());
-        // The same launch round-trips to the command line the process backend would run.
+        // The same launch round-trips through its command line.
         List<String> line=launch.command(Path.of("java"),List.of());
         assertEquals(launch,JavaLaunch.parse(line.subList(1,line.size())));
     }
 
-    @Test void fabricRemoteAndTheProcessFallback() throws Exception {
+    @Test void fabricRemote() throws Exception {
         install("1.21.1",VANILLA); install("fabric-loader-0.16.10-1.21.1",FABRIC);
         complete("fabric-loader-0.16.10-1.21.1");
         jar(root.resolve("mods/mmlf-fabric.jar"),"fabric.mod.json","dev/mmlf/bridge/BridgeCore.class");
@@ -118,12 +117,6 @@ class ReleaseRemoteTest {
         assertTrue(launch.modulePath().isEmpty());
         assertTrue(launch.classpath().contains(root.resolve("libraries/net/fabricmc/fabric-loader/0.16.10/fabric-loader-0.16.10.jar")));
         assertEquals(" net.minecraft.client.main.Main ",launch.property("FabricMcEmu"));
-
-        RuntimeSpec process=ReleaseRemote.process(prepared,root.resolve("s"),Path.of("javaw"),ACCOUNT,LAUNCHER,List.of("-Dmmlf.runtime=fabric"));
-        assertNull(process.java());
-        List<String> line=process.command().line();
-        assertEquals("javaw",line.getFirst()); assertEquals("-Dmmlf.runtime=fabric",line.get(1));
-        assertEquals(prepared.game(),process.command().workingDirectory());
     }
 
     @Test void missingRemoteVersionIsReportedBeforeAnythingIsStaged() throws Exception {

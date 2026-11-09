@@ -3,20 +3,18 @@ package dev.mmlf.bridge.render;
 import dev.mmlf.bridge.BridgeCore;
 import dev.mmlf.common.MmlfLog;
 import dev.mmlf.common.Messages.Event;
-import dev.mmlf.common.RenderHostPolicy;
 import dev.mmlf.common.RenderShaderRegistry;
 import java.util.*;
 import java.util.function.Supplier;
 
-/** Reports shader availability separately from window ownership. Does not switch the renderer yet. */
+/** Reports each runtime's shader availability for diagnostics; the window owner always renders the scene. */
 public final class RenderShaderCapabilities {
     private record Report(RenderShaderRegistry.State state,long receivedNanos) {}
     private static final RenderShaderRegistry registry=new RenderShaderRegistry();
     private static final Map<String,Report> reports=new java.util.concurrent.ConcurrentHashMap<>();
     private static boolean initialized;
     private static long lastSend;
-    private static String lastCandidate="";
-    private static volatile String autoHost;
+    private static String lastStates="";
     private RenderShaderCapabilities() {}
 
     /** Other rendering backends can register their own shader state without changing the coordinator. */
@@ -42,50 +40,23 @@ public final class RenderShaderCapabilities {
         if(now-lastSend<2_000_000_000L) return; lastSend=now;
         var state=registry.probe(); reports.put(BridgeCore.runtimeId(),new Report(state,now));
         var values=new HashMap<String,String>(); values.put("state",state.name());
-        if(BridgeCore.isPrimary()) {
-            // Only a fresh, complete set of reports may change the decision; a stale report keeps the previous host
-            // instead of falling back and forcing both runtimes through a full scene rebuild.
-            String candidate=candidate();
-            if(candidate!=null) autoHost=candidate;
-            if(autoHost!=null) values.put("host",autoHost);
-            reportCandidate(now);
-        }
+        if(BridgeCore.isPrimary()) reportStates(now);
         BridgeCore.send("event","*",new Event("mmlf:render_shader_capability",values));
     }
     public static void receive(String source,Map<String,String> values) {
         if(!Set.of("fabric","neoforge").contains(source) || source.equals(BridgeCore.runtimeId()) || values==null) return;
         try { reports.put(source,new Report(RenderShaderRegistry.State.valueOf(values.get("state")),System.nanoTime())); }
         catch(IllegalArgumentException | NullPointerException ignored) { }
-        // Followers adopt the window owner's decision rather than evaluating the same reports independently.
-        String host=values.get("host");
-        if(host!=null && !BridgeCore.isPrimary() && source.equals(BridgeCore.primaryId()) && Set.of("fabric","neoforge").contains(host)) autoHost=host;
     }
     /** Whether a shader pack is active in this runtime, as far as a registered provider can tell. */
     public static boolean localActive() { discover(); return registry.probe()==RenderShaderRegistry.State.ACTIVE; }
-    /** The window owner's announced render host for {@code MMLF_RENDER_HOST=auto}; null until first decided. */
-    public static String autoHost() { return autoHost; }
-    private static void reportCandidate(long now) {
-        Set<String> active=new HashSet<>(); var states=new TreeMap<String,String>();
+    private static void reportStates(long now) {
+        var states=new TreeMap<String,String>();
         for(String id:List.of("fabric","neoforge")) {
             Report report=reports.get(id);
-            var state=report==null || now-report.receivedNanos()>6_000_000_000L?RenderShaderRegistry.State.UNKNOWN:report.state();
-            states.put(id,state.name()); if(state==RenderShaderRegistry.State.ACTIVE) active.add(id);
+            states.put(id,(report==null || now-report.receivedNanos()>6_000_000_000L?RenderShaderRegistry.State.UNKNOWN:report.state()).name());
         }
-        String candidate=RenderHostPolicy.shaderCandidate(BridgeCore.primaryId(),active);
-        String value=candidate+states;
-        if(!value.equals(lastCandidate)) {
-            lastCandidate=value;
-            MmlfLog.info("render.capability","shader_candidate",Map.of("candidate",candidate,"states",states,"advisory",true));
-        }
-    }
-    /** A candidate is available only after both runtimes have fresh reports. */
-    public static String candidate() {
-        long now=System.nanoTime(); var active=new HashSet<String>();
-        for(String id:List.of("fabric","neoforge")) {
-            Report report=reports.get(id);
-            if(report==null || now-report.receivedNanos()>6_000_000_000L) return null;
-            if(report.state()==RenderShaderRegistry.State.ACTIVE) active.add(id);
-        }
-        return RenderHostPolicy.shaderCandidate(BridgeCore.primaryId(),active);
+        String value=states.toString();
+        if(!value.equals(lastStates)) { lastStates=value; MmlfLog.info("render.capability","shader_states",Map.of("states",states)); }
     }
 }

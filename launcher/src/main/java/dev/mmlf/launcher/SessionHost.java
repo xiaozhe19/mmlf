@@ -2,31 +2,27 @@ package dev.mmlf.launcher;
 
 import dev.mmlf.common.MmlfLog;
 import dev.mmlf.common.Session;
-import dev.mmlf.coordinator.Coordinator;
 import dev.mmlf.coordinator.CoordinatorCore;
 import dev.mmlf.coordinator.InJvmPort;
 import java.nio.file.*;
 import java.security.SecureRandom;
 import java.util.*;
-import java.util.concurrent.TimeUnit;
 
 /**
  * One fusion session: its directory, token and Coordinator, and the staging of each runtime's mods. Runtimes are
- * started by a {@link dev.mmlf.launcher.runtime.RuntimeManager}. The Coordinator listens where its runtimes are: in
- * this JVM ({@link Endpoint#IN_JVM}) or on a loopback WebSocket for runtimes in other processes.
+ * started by a {@link dev.mmlf.launcher.runtime.RuntimeManager} inside this JVM; the Coordinator serves them through an
+ * {@link InJvmPort}.
  */
 public final class SessionHost implements AutoCloseable {
     public static final Map<String,ModClassifier.Loader> LOADERS=Map.of("fabric",ModClassifier.Loader.FABRIC,"neoforge",ModClassifier.Loader.NEOFORGE);
-    public enum Endpoint { IN_JVM, WEBSOCKET }
     private final CoordinatorCore core;
-    private final Coordinator socket;
     private final InJvmPort port;
     private final Path directory, sessionFile;
     private final Session session;
     private boolean closed;
 
-    private SessionHost(CoordinatorCore core,Coordinator socket,InJvmPort port,Path directory,Session session) throws Exception {
-        this.core=core; this.socket=socket; this.port=port; this.directory=directory; this.session=session;
+    private SessionHost(CoordinatorCore core,InJvmPort port,Path directory,Session session) throws Exception {
+        this.core=core; this.port=port; this.directory=directory; this.session=session;
         sessionFile=directory.resolve("session.json"); session.write(sessionFile);
     }
     public CoordinatorCore core() { return core; }
@@ -35,19 +31,22 @@ public final class SessionHost implements AutoCloseable {
     public Session session() { return session; }
 
     /** Development session under the project's {@code runtime} directory, with the project's demo scene. */
-    public static SessionHost create(Path root,String primary,boolean selfTest,Endpoint endpoint) throws Exception {
+    public static SessionHost create(Path root,String primary,boolean selfTest) throws Exception {
         // Manual sessions use the visual scene (no redstone fixtures) when present; the self-tests need the full one.
         Path visual=root.resolve("config/visual-scene.json");
         Path sceneConfig=!selfTest && Files.isRegularFile(visual) ? visual : root.resolve("config/demo-scene.json");
-        return create(root.resolve("runtime"),Files.isRegularFile(sceneConfig)?Files.readString(sceneConfig):DEFAULT_SCENE,primary,selfTest,endpoint);
+        return create(root.resolve("runtime"),Files.isRegularFile(sceneConfig)?Files.readString(sceneConfig):DEFAULT_SCENE,primary,selfTest);
     }
-    /** Development scene used when the project has no config/demo-scene.json. */
+    /**
+     * Development scene used when the project has no config/demo-scene.json: a test block of each runtime, and a villager
+     * and a fenced-in zombie the background runtime owns, for entity interaction across runtimes.
+     */
     private static final String DEFAULT_SCENE="""
-        {"placements":[{"runtime":"fabric","block":"mmlf_fabric_test:demo_block","x":-1,"y":100,"z":0},{"runtime":"neoforge","block":"mmlf_neoforge_test:demo_block","x":1,"y":100,"z":0}]}
+        {"placements":[{"runtime":"fabric","block":"mmlf_fabric_test:demo_block","x":-1,"y":100,"z":0},{"runtime":"neoforge","block":"mmlf_neoforge_test:demo_block","x":1,"y":100,"z":0},{"runtime":"background","block":"minecraft:oak_fence","x":2,"y":100,"z":1,"properties":{"east":"true","south":"true"}},{"runtime":"background","block":"minecraft:oak_fence","x":3,"y":100,"z":1,"properties":{"east":"true","west":"true"}},{"runtime":"background","block":"minecraft:oak_fence","x":4,"y":100,"z":1,"properties":{"west":"true","south":"true"}},{"runtime":"background","block":"minecraft:oak_fence","x":2,"y":100,"z":2,"properties":{"north":"true","south":"true"}},{"runtime":"background","block":"minecraft:oak_fence","x":4,"y":100,"z":2,"properties":{"north":"true","south":"true"}},{"runtime":"background","block":"minecraft:oak_fence","x":2,"y":100,"z":3,"properties":{"north":"true","east":"true"}},{"runtime":"background","block":"minecraft:oak_fence","x":3,"y":100,"z":3,"properties":{"east":"true","west":"true"}},{"runtime":"background","block":"minecraft:oak_fence","x":4,"y":100,"z":3,"properties":{"west":"true","north":"true"}}],"entities":[{"runtime":"background","type":"minecraft:villager","x":-2.5,"y":100,"z":2.5,"yaw":0,"profession":"minecraft:farmer"},{"runtime":"background","type":"minecraft:zombie","x":3.5,"y":100,"z":2.5,"yaw":0,"equipment":{"head":"minecraft:leather_helmet"}}]}
         """;
 
     /** Creates a session directory under {@code runtime}, which also receives latest-session.txt; {@code scene} may be null. */
-    public static SessionHost create(Path runtime,String scene,String primary,boolean selfTest,Endpoint endpoint) throws Exception {
+    public static SessionHost create(Path runtime,String scene,String primary,boolean selfTest) throws Exception {
         if(!LOADERS.containsKey(primary)) throw new IllegalArgumentException("unknown primary runtime "+primary);
         Files.createDirectories(runtime);
         Path dir=Files.createTempDirectory(runtime,"session-");
@@ -57,24 +56,13 @@ public final class SessionHost implements AutoCloseable {
         byte[] secret=new byte[32]; new SecureRandom().nextBytes(secret);
         String token=HexFormat.of().formatHex(secret);
         CoordinatorCore core=new CoordinatorCore(token);
-        Coordinator socket=null; InJvmPort port=null; String uri;
-        if(endpoint==Endpoint.IN_JVM) {
-            Session probe=new Session(Session.IN_JVM,token,dir.toString(),primary);
-            port=new InJvmPort(core,probe.identity());
-            uri=Session.IN_JVM;
-        } else {
-            socket=new Coordinator(0,core);
-            socket.start();
-            long deadline=System.nanoTime()+TimeUnit.SECONDS.toNanos(20);
-            while(socket.getPort()==0 && System.nanoTime()<deadline) Thread.sleep(20);
-            if(socket.getPort()==0) { try { socket.stop(); } catch(Exception ignored) { } throw new IllegalStateException("Coordinator did not start"); }
-            uri="ws://127.0.0.1:"+socket.getPort();
-        }
+        Session session=new Session(Session.IN_JVM,token,dir.toString(),primary);
+        InJvmPort port=new InJvmPort(core,session.identity());
         // Without a scenario the clients play their own menus and worlds; with one they open the demo world.
         if(scene!=null) Files.writeString(dir.resolve("scenario.json"),scene);
         if(selfTest) Files.createFile(dir.resolve("self-test"));
-        MmlfLog.info("launcher","coordinator_started",Map.of("endpoint",endpoint.name()));
-        return new SessionHost(core,socket,port,dir,new Session(uri,token,dir.toString(),primary));
+        MmlfLog.info("launcher","coordinator_started",Map.of("endpoint","IN_JVM"));
+        return new SessionHost(core,port,dir,session);
     }
 
     /** NeoForge's early loading window opens before any mod runs; a background one must not show it. */
@@ -128,10 +116,9 @@ public final class SessionHost implements AutoCloseable {
     /** Stops the Coordinator; the runtimes belong to the {@link dev.mmlf.launcher.runtime.RuntimeManager}. */
     @Override public synchronized void close() {
         if(closed) return; closed=true;
-        if(port!=null) port.close();
-        if(socket!=null) try { socket.stop(); } catch(Exception ignored) { }
+        port.close();
         // In-JVM frame channels live as long as the session that names them.
-        if(session.inJvm()) dev.mmlf.common.FrameFile.releaseMemory(session.identity());
+        dev.mmlf.common.FrameFile.releaseMemory(session.identity());
         MmlfLog.info("launcher","shutdown",Map.of());
     }
 }

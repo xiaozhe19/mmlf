@@ -2,84 +2,25 @@ package dev.mmlf.launcher;
 
 import dev.mmlf.common.MmlfLog;
 import dev.mmlf.common.Wire;
-import java.io.*;
+import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.*;
 import java.util.*;
 import dev.mmlf.launcher.runtime.*;
-import java.time.Duration;
 import java.util.zip.ZipFile;
 
 /**
- * Release session manager, started by the MMLF mod of the client a launcher started. It hosts the Coordinator and
- * starts the other runtime from the version the player installed with the same launcher, then lives until the primary
- * is gone. One request line on stdin; one reply line on stdout ({@code MMLF-SESSION <file>} or {@code MMLF-ERROR <text>}).
+ * Release helpers shared by the in-JVM release session: finding and staging the other loader's installed version,
+ * pruning old session directories and turning a background runtime's exit into the error the primary shows.
  */
-public final class Manager {
+public final class ReleaseSupport {
     public record Request(String primary,String minecraftVersion,String minecraftRoot,String gameDirectory,String launcherName,String launcherVersion,
                           VersionProfile.Account account,long hostPid,long maxMemoryMb) {}
     private static final Map<String,VersionProfile.Loader> PROFILE_LOADERS=Map.of("fabric",VersionProfile.Loader.FABRIC,"neoforge",VersionProfile.Loader.NEOFORGE);
     private static final Map<String,String> NAMES=Map.of("fabric","Fabric","neoforge","NeoForge");
     /** Session directories kept besides the new one, for looking at a recent session's logs. */
     private static final int KEPT_SESSIONS=2;
-    private Manager() {}
-
-    public static void main(String[] args) {
-        // stdout carries only the reply, in UTF-8 whatever the console's code page; log lines go to stderr until then.
-        PrintStream reply=new PrintStream(new FileOutputStream(FileDescriptor.out),true,StandardCharsets.UTF_8);
-        System.setOut(System.err);
-        RuntimeManager manager=null;
-        try {
-            Request request=Wire.JSON.fromJson(new BufferedReader(new InputStreamReader(System.in,StandardCharsets.UTF_8)).readLine(),Request.class);
-            if(request==null || !PROFILE_LOADERS.containsKey(request.primary())) throw new IllegalStateException("无效的启动请求");
-            String remote=ReleaseRemote.remoteOf(request.primary());
-            Path root=Path.of(request.minecraftRoot());
-            ReleaseRemote.Prepared prepared=ReleaseRemote.prepare(root,request.primary(),request.minecraftVersion(),Path.of(request.gameDirectory()),(f,t)->progress(reply,f,t));
-
-            Path runtime=Path.of(request.gameDirectory()).resolve("mmlf").resolve("sessions");
-            removeOldSessions(runtime);
-            SessionHost host=SessionHost.create(runtime,null,request.primary(),false,SessionHost.Endpoint.WEBSOCKET);
-            manager=new RuntimeManager(host,new ProcessBackend(host));
-            Runtime.getRuntime().addShutdownHook(new Thread(manager::close,"mmlf-cleanup"));
-            long started=System.currentTimeMillis();
-            host.suppressEarlyWindow(remote,prepared.game());
-            boolean windows=System.getProperty("os.name").toLowerCase(Locale.ROOT).contains("win");
-            Path java=Path.of(System.getProperty("java.home"),"bin",windows?"javaw.exe":"java");
-            List<String> extra=new ArrayList<>();
-            if(request.maxMemoryMb()>0) extra.add("-Xmx"+request.maxMemoryMb()+"m");
-            extra.add("-Dmmlf.session="+host.sessionFile());
-            extra.add("-Dmmlf.runtime="+remote);
-            extra.add("-Dmmlf.logLevel="+MmlfLog.configuredLevel());
-            MmlfLog.info("launcher","remote_version",Map.of("runtime",remote,"version",prepared.profile().id(),"loaderVersion",prepared.profile().loaderVersion(),"mods",prepared.mods().size(),"instance",prepared.instance().toString()));
-            progress(reply,0.9,"启动 "+prepared.profile().id());
-            reportExit(manager,remote,prepared.game(),started);
-            manager.start(ReleaseRemote.process(prepared,host.directory(),java,request.account(),Map.of("name",request.launcherName(),"version",request.launcherVersion()),extra));
-
-            reply.println("MMLF-SESSION "+host.sessionFile());
-            reply.flush();
-            // Nobody reads stdout after the reply; a full pipe would block every log line.
-            PrintStream log=new PrintStream(new FileOutputStream(host.directory().resolve("manager.log").toFile(),true),true,StandardCharsets.UTF_8);
-            System.setOut(log); System.setErr(log);
-            ProcessHandle primary=ProcessHandle.of(request.hostPid()).orElse(null);
-            manager.supervise(()->primary!=null && primary.isAlive(),Duration.ofMinutes(10),false);
-        } catch(Throwable e) {
-            String message=e.getMessage()==null?e.toString():e.getMessage();
-            reply.println("MMLF-ERROR "+message.replace('\r',' ').replace('\n',' '));
-            reply.flush();
-            if(manager!=null) manager.close();
-            System.exit(1);
-        }
-        MmlfLog.info("launcher","session_cleanup",Map.of());
-        manager.close();
-        // Coordinator server threads are non-daemon; the JVM would otherwise outlive the session.
-        System.exit(0);
-    }
-
-    /** A step before the reply, for the primary's progress panel; the reply line still ends the exchange. */
-    static void progress(PrintStream reply,double fraction,String text) {
-        reply.println("MMLF-PROGRESS "+fraction+" "+text.replace('\r',' ').replace('\n',' '));
-        reply.flush();
-    }
+    private ReleaseSupport() {}
 
     /** The newest installed version of the other loader on the same Minecraft version, complete on disk. */
     static VersionProfile remoteVersion(Path root,String remote,String minecraftVersion) throws IOException {

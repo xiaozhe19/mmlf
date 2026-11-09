@@ -80,8 +80,31 @@ public final class Messages {
         public RayRequest(String id,Pose pose,double reach) { this(id,pose,reach,"use","minecraft:air",false); }
         public RayRequest(String id,Pose pose,double reach,String action,String heldItem,boolean secondaryUse) { this(id,pose,reach,action,heldItem,secondaryUse,MAIN_HAND,-1); }
     }
+    /**
+     * One runtime's answer to a ray: the nearest block ({@code objectId}, position, face) or entity ({@code entity}, its
+     * UUID) it owns along the ray, or a miss. An entity hit names no object; its position is the entity's block.
+     */
     public record RayHit(String actionId, String objectId, long revision, double distance,
-                         int x, int y, int z, String face, double hitX, double hitY, double hitZ, boolean miss) {}
+                         int x, int y, int z, String face, double hitX, double hitY, double hitZ, boolean miss, String entity) {
+        public RayHit(String actionId,String objectId,long revision,double distance,int x,int y,int z,String face,double hitX,double hitY,double hitZ,boolean miss) {
+            this(actionId,objectId,revision,distance,x,y,z,face,hitX,hitY,hitZ,miss,null);
+        }
+        public boolean entityHit() { return entity!=null; }
+    }
+    /**
+     * An entity a runtime owns, as other runtimes need it without simulating it: where it is and how large, for collision
+     * with the one player. {@code id} is the entity's UUID in its owner's world.
+     */
+    public record EntityState(String id, String type, double x, double y, double z, double width, double height, boolean pushable) {}
+    /** Every entity {@code owner} currently owns near the player in {@code dimension}; each snapshot replaces the last. */
+    public record Entities(String owner, String dimension, long sequence, List<EntityState> entities) {}
+    /**
+     * Damage an owner's entity did to its copy of the one player. The primary owns the player, so the owner never applies
+     * it itself: the primary does, with knockback away from {@code fromX}/{@code fromZ}.
+     */
+    public record PlayerDamage(String attacker, String attackerType, String damageType, float amount, double fromX, double fromZ) {}
+    /** Experience an owner's copy of the one player collected (orbs of its entities); the primary gives it to the player. */
+    public record PlayerExperience(int amount) {}
     public record Interaction(String actionId, Pose pose, RayHit hit,String action,String heldItem,boolean secondaryUse,String hand,int selectedSlot) {
         public Interaction(String id,Pose pose,RayHit hit) { this(id,pose,hit,"use","minecraft:air",false); }
         public Interaction(String id,Pose pose,RayHit hit,String action,String heldItem,boolean secondaryUse) { this(id,pose,hit,action,heldItem,secondaryUse,MAIN_HAND,-1); }

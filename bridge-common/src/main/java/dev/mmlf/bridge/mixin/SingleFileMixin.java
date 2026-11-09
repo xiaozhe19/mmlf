@@ -20,8 +20,7 @@ public abstract class SingleFileMixin {
     private void mmlf$omitRemoteReserve(ResourceManager manager, SpriteSource.Output output, CallbackInfo ci) {
         if (!resourceId.equals(ResourceLocation.fromNamespaceAndPath("mmlf_bridge", "remote_reserve"))) return;
         ci.cancel();
-        if (RuntimeContext.current().background() || !dev.mmlf.bridge.Experiments.GEOMETRY_REPLAY
-                || !"on".equalsIgnoreCase(System.getProperty("mmlf.terrain",System.getenv().getOrDefault("MMLF_TERRAIN","off")))) return;
+        if (RuntimeContext.current().background() || !dev.mmlf.bridge.Experiments.TERRAIN) return;
         ResourceLocation id=resourceId;
         int size=dev.mmlf.bridge.render.TerrainAtlas.reserveSize();
         output.add(id,loader -> {

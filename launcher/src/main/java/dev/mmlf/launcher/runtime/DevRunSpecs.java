@@ -40,25 +40,6 @@ public final class DevRunSpecs {
         try(var writer=Files.newBufferedWriter(config.resolve("iris.properties"),StandardCharsets.UTF_8)) { options.store(writer,"MMLF isolated shader test"); }
     }
 
-    /** Process backend: all given runtimes from one Gradle invocation, as one handle. */
-    public static RuntimeSpec gradle(SessionHost session,Path root,List<String> runtimes) throws Exception {
-        if(runtimes.isEmpty()) throw new IllegalArgumentException("no runtimes to launch");
-        List<String> tasks=new ArrayList<>();
-        for(String id:runtimes) {
-            String task=RUN_TASKS.get(id); if(task==null) throw new IllegalArgumentException("unknown runtime "+id);
-            tasks.add(task);
-            prepareGameDirectory(session,root,id);
-        }
-        boolean windows=System.getProperty("os.name").toLowerCase(Locale.ROOT).contains("win");
-        Path wrapper=root.resolve(windows?"gradlew.bat":"gradlew");
-        List<String> command=new ArrayList<>(windows?List.of("cmd.exe","/d","/c",wrapper.toString()):List.of(wrapper.toString()));
-        if(tasks.size()>1) command.add("--parallel");
-        command.addAll(tasks);
-        String log=runtimes.size()==2?"clients.log":String.join("-",runtimes)+".log";
-        return RuntimeSpec.command(String.join("-",runtimes),runtimes.size()==1?runtimes.getFirst():"mixed",session.directory().resolve(log),
-            new RuntimeSpec.Command(command,root,runtimes));
-    }
-
     /** In-JVM backend: the runtime's native dev launch, with its game directory in the session. */
     public static RuntimeSpec inJvm(SessionHost session,Path root,String runtime) throws Exception {
         Path game=prepareGameDirectory(session,root,runtime);

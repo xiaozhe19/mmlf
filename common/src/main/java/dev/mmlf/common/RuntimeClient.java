@@ -64,7 +64,12 @@ public final class RuntimeClient implements AutoCloseable {
             ReliableLink.Inbound inbound=reliable.receive(w);
             if(inbound.ack()!=null) transmit(List.of(inbound.ack()));
             for(Wire delivered:inbound.deliver()) receiver.accept(delivered);
-        } catch (RuntimeException e) { MmlfLog.warn("protocol","invalid_message",Map.of("exception",e.getClass().getSimpleName())); }
+        } catch (RuntimeException e) {
+            Throwable root=e; while(root.getCause()!=null && root.getCause()!=root) root=root.getCause();
+            int start=text.indexOf("\"type\":\""), end=start<0?-1:text.indexOf('"',start+8);
+            MmlfLog.warn("protocol","invalid_message",Map.of("exception",e.getClass().getSimpleName(),"message",String.valueOf(e.getMessage()),
+                "cause",root==e?"":root.toString(),"type",end<0?"unknown":text.substring(start+8,end),"at",String.valueOf(root.getStackTrace().length>0?root.getStackTrace()[0]:"")));
+        }
     }
     public boolean ready() { return registered; }
     /** A snapshot or request: dropped while the link is down, since a newer one or the requester's timeout replaces it. */

@@ -1,3 +1,2 @@
-apply plugin: 'application'
 dependencies { implementation project(':common') }
-application { mainClass = 'dev.mmlf.coordinator.CoordinatorMain' }
+

@@ -13,7 +13,7 @@ import org.junit.jupiter.api.Test;
 import static org.junit.jupiter.api.Assertions.*;
 import static dev.mmlf.coordinator.CoordinatorIntegrationTest.awaitTrue;
 
-/** The in-JVM transport: same protocol and guarantees as the WebSocket one, across class loaders, without leaks. */
+/** The in-JVM transport: the protocol's guarantees across class loaders, without leaks. */
 class InJvmTransportTest {
  static Session session(Path dir) { return new Session(Session.IN_JVM,"secret-"+UUID.randomUUID(),dir.toString(),"fabric"); }
 
@@ -86,7 +86,7 @@ class InJvmTransportTest {
   for(WeakReference<ClassLoader> r:loaders) assertNull(r.get(),"isolated runtime class loader leaked");
  }
  private static void exchange(Session session,List<WeakReference<ClassLoader>> loaders) throws Exception {
-  URL[] classpath=classpath(Wire.class,com.google.gson.Gson.class,org.java_websocket.client.WebSocketClient.class,org.slf4j.Logger.class);
+  URL[] classpath=classpath(Wire.class,com.google.gson.Gson.class);
   BlockingQueue<String> fabricSeen=new LinkedBlockingQueue<>(), neoSeen=new LinkedBlockingQueue<>();
   try(URLClassLoader a=new URLClassLoader("fabric-runtime",classpath,ClassLoader.getPlatformClassLoader());
       URLClassLoader b=new URLClassLoader("neoforge-runtime",classpath,ClassLoader.getPlatformClassLoader())) {

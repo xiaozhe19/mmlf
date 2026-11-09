@@ -13,13 +13,12 @@ import org.lwjgl.opengl.GL30;
 /** Copies a received block atlas into the reserved area of the local block atlas, on the render thread. */
 public final class TerrainAtlas {
     private static final ResourceLocation RESERVE=ResourceLocation.fromNamespaceAndPath("mmlf_bridge","remote_reserve");
-    static final boolean ENABLED="on".equalsIgnoreCase(System.getProperty("mmlf.terrain",System.getenv().getOrDefault("MMLF_TERRAIN","off")));
     private static int framebuffer;
     static volatile boolean ready;
     private static volatile int reserveSize=1024;
     public static int reserveSize() { return reserveSize; }
     static void ensureCapacity(Minecraft mc,int width,int height) {
-        if(!ENABLED || width<=reserveSize && height<=reserveSize) return;
+        if(!dev.mmlf.bridge.Experiments.TERRAIN || width<=reserveSize && height<=reserveSize) return;
         int need=Math.max(width,height), size=reserveSize;
         int max=GL11.glGetInteger(GL11.GL_MAX_TEXTURE_SIZE);
         while(size<need && size<=max/4) size*=2;
@@ -35,7 +34,7 @@ public final class TerrainAtlas {
 
     static boolean copy(RemoteTexture source,int width,int height) {
         ready=false;
-        if(!ENABLED) return false;
+        if(!dev.mmlf.bridge.Experiments.TERRAIN) return false;
         var texture=Minecraft.getInstance().getTextureManager().getTexture(TextureAtlas.LOCATION_BLOCKS);
         if (!(texture instanceof TextureAtlas target)) return false;
         var reserve=((TextureAtlasAccessor)target).mmlf$sprites().get(RESERVE);
@@ -65,4 +64,41 @@ public final class TerrainAtlas {
             RenderSystem.bindTexture(previousTexture);
         }
     }
+    /** Copy only the changed animation rectangles, preserving their mip levels and the previous GL bindings. */
+    static boolean copyPatches(RemoteTexture source,dev.mmlf.common.RenderAtlasPatchCodec.Batch batch) {
+        if(!ready) return false;
+        var texture=Minecraft.getInstance().getTextureManager().getTexture(TextureAtlas.LOCATION_BLOCKS);
+        if(!(texture instanceof TextureAtlas target)) { ready=false; return false; }
+        var reserve=((TextureAtlasAccessor)target).mmlf$sprites().get(RESERVE);
+        if(reserve==null || batch.atlasWidth()>reserve.contents().width() || batch.atlasHeight()>reserve.contents().height()) { ready=false; return false; }
+        int levels=Math.max(0,Math.min(4,((TextureAtlasAccessor)target).mmlf$mipLevel()));
+        for(var patch:batch.patches()) {
+            int level=patch.level();
+            if(level>levels) continue;
+            if((long)patch.x()+patch.width()>Math.max(1,batch.atlasWidth()>>level)
+                || (long)patch.y()+patch.height()>Math.max(1,batch.atlasHeight()>>level)) { ready=false; return false; }
+        }
+        if(framebuffer==0) framebuffer=GL30.glGenFramebuffers();
+        int previousRead=GL11.glGetInteger(GL30.GL_READ_FRAMEBUFFER_BINDING);
+        int previousTexture=GL11.glGetInteger(GL11.GL_TEXTURE_BINDING_2D);
+        try {
+            GL30.glBindFramebuffer(GL30.GL_READ_FRAMEBUFFER,framebuffer);
+            RenderSystem.bindTexture(target.getId());
+            for(int level=0;level<=levels;level++) {
+                final int mip=level;
+                if(batch.patches().stream().noneMatch(p->p.level()==mip)) continue;
+                GL30.glFramebufferTexture2D(GL30.GL_READ_FRAMEBUFFER,GL30.GL_COLOR_ATTACHMENT0,GL11.GL_TEXTURE_2D,source.getId(),level);
+                if(GL30.glCheckFramebufferStatus(GL30.GL_READ_FRAMEBUFFER)!=GL30.GL_FRAMEBUFFER_COMPLETE) { ready=false; return false; }
+                for(var patch:batch.patches()) if(patch.level()==level)
+                    GL11.glCopyTexSubImage2D(GL11.GL_TEXTURE_2D,level,(reserve.getX()>>level)+patch.x(),(reserve.getY()>>level)+patch.y(),
+                            patch.x(),patch.y(),patch.width(),patch.height());
+            }
+            return true;
+        } finally {
+            GL30.glFramebufferTexture2D(GL30.GL_READ_FRAMEBUFFER,GL30.GL_COLOR_ATTACHMENT0,GL11.GL_TEXTURE_2D,0,0);
+            GL30.glBindFramebuffer(GL30.GL_READ_FRAMEBUFFER,previousRead);
+            RenderSystem.bindTexture(previousTexture);
+        }
+    }
+
 }

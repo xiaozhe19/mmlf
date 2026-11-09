@@ -105,7 +105,7 @@ final class AtlasAnimation {
                     GL11.glTexSubImage2D(GL11.GL_TEXTURE_2D,patch.level(),patch.x(),patch.y(),patch.width(),patch.height(),GL11.GL_RGBA,GL11.GL_UNSIGNED_BYTE,pixels);
                 }
             } finally { transfer.close(); if(pixels!=null) MemoryUtil.memFree(pixels); }
-            if(!TerrainAtlas.copy(atlas,width,height)) TerrainMeshes.invalidate();
+            if(!TerrainAtlas.copyPatches(atlas,batch)) TerrainMeshes.invalidate();
         } catch(java.io.IOException | RuntimeException e) { MmlfLog.sampled("render.submission","atlas_animation_apply_failed",5000,Map.of("exception",e.toString())); }
     }
 }

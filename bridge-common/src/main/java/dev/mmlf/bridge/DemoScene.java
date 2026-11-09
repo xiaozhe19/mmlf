@@ -22,7 +22,13 @@ public final class DemoScene {
  private static float yaw(float value) { return side>0?value:-value; }
  /** {@code properties} sets block state values by name; {@code items} ("id*count") fills a container block entity. */
  public record Placement(String runtime,String block,int x,int y,int z,boolean optional,Map<String,String> properties,List<String> items) {}
- public record Scene(List<Placement> placements) {}
+ /**
+  * An entity the scene spawns in its owner's world, which then owns it ({@link RemoteEntities#claim}) whatever its type.
+  * {@code equipment} maps slot names ({@code head}, {@code mainhand}, ...) to item ids; {@code profession} gives a
+  * villager a fixed trade set; {@code invulnerable} keeps it alive among the scene's hostile mobs.
+  */
+ public record SceneEntity(String runtime,String type,double x,double y,double z,float yaw,Map<String,String> equipment,String profession,boolean invulnerable) {}
+ public record Scene(List<Placement> placements,List<SceneEntity> entities) {}
  /** The scene as loaded, for the collaboration self-test. */
  static Scene scene;
  /** Diagnostics: positions of this runtime's scene blocks (with the upper half of double blocks), watched for changes. */
@@ -50,8 +56,41 @@ public final class DemoScene {
   * A placement's runtime may be {@code primary} or {@code background} instead of a loader, and its block may name
   * {@code {primary}} or {@code {background}}, so one scene tests the same arrangement whichever runtime is the primary.
   */
- static String owner(Placement item,Session session) {
-  return switch(item.runtime()) { case "primary" -> session.primary(); case "background" -> background(session); default -> item.runtime(); };
+ static String owner(Placement item,Session session) { return owner(item.runtime(),session); }
+ static String owner(String runtime,Session session) {
+  return switch(runtime) { case "primary" -> session.primary(); case "background" -> background(session); default -> runtime; };
+ }
+ /** Spawns (or, in a world saved with it, finds again) one scene entity and claims it for this runtime. */
+ private static void spawn(net.minecraft.server.level.ServerLevel level,SceneEntity item,int index) {
+  String tag="mmlf_scene_entity_"+index;
+  var area=new net.minecraft.world.phys.AABB(item.x()-16,item.y()-8,item.z()-16,item.x()+16,item.y()+8,item.z()+16);
+  var found=level.getEntities((net.minecraft.world.entity.Entity)null,area,e->e.getTags().contains(tag));
+  net.minecraft.world.entity.Entity entity=found.isEmpty()?null:found.getFirst();
+  if(entity==null) {
+   var type=net.minecraft.world.entity.EntityType.byString(item.type()).orElse(null);
+   if(type==null) { MmlfLog.warn("scene","scene_entity_unknown",Map.of("type",item.type())); return; }
+   entity=type.create(level);
+   if(entity==null) return;
+   entity.moveTo(item.x(),item.y(),item.z(),item.yaw(),0);
+   entity.addTag(tag);
+   if(entity instanceof net.minecraft.world.entity.Mob mob) {
+    mob.setPersistenceRequired();
+    if(item.equipment()!=null) for(var slot:item.equipment().entrySet()) {
+     var itemKey=ResourceLocation.parse(slot.getValue());
+     if(BuiltInRegistries.ITEM.containsKey(itemKey)) { var equipment=net.minecraft.world.entity.EquipmentSlot.byName(slot.getKey()); mob.setItemSlot(equipment,new net.minecraft.world.item.ItemStack(BuiltInRegistries.ITEM.get(itemKey))); mob.setDropChance(equipment,0); }
+    }
+   }
+   if(entity instanceof net.minecraft.world.entity.npc.Villager villager && item.profession()!=null) {
+    var profession=BuiltInRegistries.VILLAGER_PROFESSION.get(ResourceLocation.parse(item.profession()));
+    villager.setVillagerData(villager.getVillagerData().setProfession(profession).setLevel(1));
+    villager.setVillagerXp(1); // keeps the profession without a job site
+   }
+   level.addFreshEntity(entity);
+  }
+  // A world saved with the entity keeps what an earlier scene set; the current scene decides.
+  entity.setInvulnerable(item.invulnerable());
+  RemoteEntities.claim(entity.getUUID());
+  MmlfLog.info("scene","scene_entity",Map.of("type",item.type(),"uuid",entity.getUUID().toString(),"spawned",found.isEmpty()));
  }
  static String block(Placement item,Session session) { return item.block().replace("{primary}",session.primary()).replace("{background}",background(session)); }
  private static String background(Session session) { return session.primary().equals("fabric")?"neoforge":"fabric"; }
@@ -160,6 +199,11 @@ public final class DemoScene {
      level.setDayTime(Files.exists(session.root().resolve("self-test"))?6000:240000);level.setWeatherParameters(0,0,false,false);
      level.getGameRules().getRule(GameRules.RULE_DAYLIGHT).set(false,server);
      level.getGameRules().getRule(GameRules.RULE_WEATHER_CYCLE).set(false,server);
+     // Scene mobs need a difficulty that keeps hostile ones; nothing else may spawn among them.
+     if(scene.entities()!=null && !scene.entities().isEmpty()) {
+      server.setDifficulty(Difficulty.NORMAL,true);
+      level.getGameRules().getRule(GameRules.RULE_DOMOBSPAWNING).set(false,server);
+     }
      // A thin background has no vanilla terrain of its own: the floor exists only in the primary's world.
      if(!(Experiments.THIN_WORLD && !BridgeCore.isPrimary())) for(int x=-7;x<=7;x++) for(int z=-6;z<=8;z++) {
       for(int y=100;y<=106;y++) level.setBlock(new BlockPos(x,y,z),net.minecraft.world.level.block.Blocks.AIR.defaultBlockState(),3);
@@ -181,6 +225,10 @@ public final class DemoScene {
       }
       if(blockState.hasProperty(net.minecraft.world.level.block.state.properties.BlockStateProperties.DOUBLE_BLOCK_HALF))
        level.setBlock(at.above(),blockState.setValue(net.minecraft.world.level.block.state.properties.BlockStateProperties.DOUBLE_BLOCK_HALF,net.minecraft.world.level.block.state.properties.DoubleBlockHalf.UPPER),3);
+     }
+     if(scene.entities()!=null) for(int i=0;i<scene.entities().size();i++) {
+      SceneEntity item=scene.entities().get(i);
+      if(owner(item.runtime(),session).equals(runtime)) spawn(level,item,i);
      }
      watched.clear(); watchUntil=System.currentTimeMillis()+120_000;
      for(Placement item:scene.placements()) if(owner(item,session).equals(runtime)) { var at=new BlockPos(item.x(),item.y(),item.z()); watched.add(at.asLong()); watched.add(at.above().asLong()); }

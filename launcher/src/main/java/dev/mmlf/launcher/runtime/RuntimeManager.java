@@ -14,8 +14,6 @@ import java.util.function.BooleanSupplier;
  * the primary is gone, and cleans everything up once. The session (directory, Coordinator) belongs to the manager.
  */
 public final class RuntimeManager implements AutoCloseable {
-    /** Backend names for {@code -Dmmlf.backend}; in-JVM is the architecture, process the transitional fallback. */
-    public static final String IN_JVM="injvm", PROCESS="process";
     private final SessionHost session;
     private final RuntimeBackend backend;
     private final List<RuntimeHandle> runtimes=new CopyOnWriteArrayList<>();
@@ -23,15 +21,6 @@ public final class RuntimeManager implements AutoCloseable {
     private boolean closed;
 
     public RuntimeManager(SessionHost session,RuntimeBackend backend) { this.session=Objects.requireNonNull(session); this.backend=Objects.requireNonNull(backend); }
-    /** The backend this JVM is configured for; in-JVM unless {@code -Dmmlf.backend=process}. */
-    public static String configuredBackend() {
-        String name=System.getProperty("mmlf.backend",System.getenv().getOrDefault("MMLF_BACKEND",IN_JVM)).toLowerCase(Locale.ROOT);
-        if(!name.equals(IN_JVM) && !name.equals(PROCESS)) throw new IllegalArgumentException("unknown MMLF backend "+name);
-        return name;
-    }
-    public static RuntimeBackend backend(String name,SessionHost session) {
-        return name.equals(PROCESS)?new ProcessBackend(session):new InJvmBackend(session);
-    }
 
     public SessionHost session() { return session; }
     public RuntimeBackend backend() { return backend; }
@@ -61,7 +50,7 @@ public final class RuntimeManager implements AutoCloseable {
 
     public enum End { PRIMARY_EXITED, PRIMARY_DISCONNECTED, REGISTRATION_TIMEOUT, RUNTIMES_EXITED }
     /**
-     * Waits until the session is over: the primary's process is gone, the primary left the Coordinator, it never
+     * Waits until the session is over: the primary is gone, the primary left the Coordinator, it never
      * registered within {@code registration}, or (when asked) every started runtime has ended.
      */
     public End supervise(BooleanSupplier primaryAlive,Duration registration,boolean endWhenRuntimesExit) throws InterruptedException {

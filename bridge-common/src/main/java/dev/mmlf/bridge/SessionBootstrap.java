@@ -1,6 +1,6 @@
 package dev.mmlf.bridge;
 
-import dev.mmlf.launcher.Manager;
+import dev.mmlf.launcher.ReleaseSupport;
 import dev.mmlf.launcher.SessionHost;
 import dev.mmlf.launcher.runtime.*;
 import java.nio.file.*;
@@ -8,8 +8,7 @@ import java.util.*;
 
 /**
  * Lets whichever client the player starts become the primary runtime: with no session configured, the client hosts
- * the session itself and starts every other known runtime. In-JVM (the default) those runtimes run inside this JVM
- * through their loaders' native launches; with {@code -Dmmlf.backend=process} they run as separate Gradle clients.
+ * the session itself and starts every other known runtime inside this JVM through their loaders' native launches.
  * Development builds only (-Dmmlf.root names the project); release builds start their session in {@link ReleaseSession}.
  */
 final class SessionBootstrap {
@@ -23,18 +22,14 @@ final class SessionBootstrap {
         if(!DevRunSpecs.RUN_TASKS.containsKey(runtime)) { System.err.println("MMLF: runtime "+runtime+" cannot host a session"); return null; }
         try {
             Path project=Path.of(root).toAbsolutePath().normalize();
-            String backend=RuntimeManager.configuredBackend();
-            boolean inJvm=backend.equals(RuntimeManager.IN_JVM);
-            SessionHost host=SessionHost.create(project,runtime,"true".equals(System.getProperty("mmlf.selfTest",System.getenv("MMLF_SELF_TEST"))),
-                inJvm?SessionHost.Endpoint.IN_JVM:SessionHost.Endpoint.WEBSOCKET);
-            adopt(new RuntimeManager(host,RuntimeManager.backend(backend,host)));
+            SessionHost host=SessionHost.create(project,runtime,"true".equals(System.getProperty("mmlf.selfTest",System.getenv("MMLF_SELF_TEST"))));
+            adopt(new RuntimeManager(host,new InJvmBackend(host)));
             List<String> others=new ArrayList<>(new TreeSet<>(DevRunSpecs.RUN_TASKS.keySet())); others.remove(runtime);
             long started=System.currentTimeMillis();
-            for(String other:others) Manager.reportExit(manager,other,host.directory().resolve(other),started);
+            for(String other:others) ReleaseSupport.reportExit(manager,other,host.directory().resolve(other),started);
             if(solo()) System.out.println("MMLF: solo baseline (MMLF_SOLO); no other runtime started");
-            else if(inJvm) for(String other:others) manager.start(DevRunSpecs.inJvm(host,project,other));
-            else manager.start(DevRunSpecs.gradle(host,project,others));
-            System.out.println("MMLF: hosting session as primary "+runtime+" ("+backend+"); started "+(solo()?List.of():others)+" in "+host.directory());
+            else for(String other:others) manager.start(DevRunSpecs.inJvm(host,project,other));
+            System.out.println("MMLF: hosting session as primary "+runtime+"; started "+(solo()?List.of():others)+" in "+host.directory());
             testDeadline(manager);
             return host.sessionFile();
         } catch(Exception e) {
@@ -75,7 +70,7 @@ final class SessionBootstrap {
         manager=hosted;
         Runtime.getRuntime().addShutdownHook(new Thread(hosted::close,"mmlf-host-cleanup"));
         // A runtime that ended has released its copy of LWJGL's JVM-wide fallback table slot; make sure it holds ours.
-        if(hosted.session().session().inJvm()) hosted.onExit((handle,exit)->InJvmLwjgl.verifyHostTable());
+        hosted.onExit((handle,exit)->InJvmLwjgl.verifyHostTable());
     }
     /** Stops the runtimes this client hosts and ends the session; returns once they ended or the wait ran out. */
     static void stopRuntimes() {
@@ -86,7 +81,7 @@ final class SessionBootstrap {
         dev.mmlf.common.MmlfLog.info("launcher","hosted_runtimes_stopped",Map.of("elapsedMs",(System.nanoTime()-started)/1_000_000,
             "alive",m.runtimes().stream().filter(RuntimeHandle::alive).map(RuntimeHandle::id).toList()));
     }
-    /** A release jar outside the development project: the session manager it carries starts the session instead. */
+    /** A release jar outside the development project: {@link ReleaseSession} starts the session instead. */
     static boolean release() {
         String root=System.getProperty("mmlf.root");
         return (root==null || root.isBlank()) && ReleaseSession.bundled();

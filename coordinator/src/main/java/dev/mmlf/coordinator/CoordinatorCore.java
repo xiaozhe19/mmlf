@@ -7,7 +7,7 @@ import java.util.concurrent.*;
 
 /**
  * Session router independent of any transport; the runtime that owns an object controls its state. Front-ends
- * ({@link Coordinator} over loopback WebSocket, {@link InJvmPort} inside one JVM) hand it text frames per {@link Peer}.
+ * ({@link InJvmPort}) hand it text frames per {@link Peer}.
  */
 public final class CoordinatorCore {
     /** One connected runtime as seen by the router. Sends must not call back into the router on the caller's stack. */
@@ -22,6 +22,8 @@ public final class CoordinatorCore {
     private final Set<Peer> connections = ConcurrentHashMap.newKeySet();
     private final Map<String,String> incarnations = new ConcurrentHashMap<>();
     private final WorldIndex world = new WorldIndex();
+    /** Entity ids each runtime last reported owning; entity hits and damage reports must name one of the sender's. */
+    private final Map<String,Set<String>> entities = new ConcurrentHashMap<>();
     private volatile String primary;
     private volatile boolean primarySeen;
     private long metricStart=System.nanoTime(),metricMessages;
@@ -45,6 +47,7 @@ public final class CoordinatorCore {
             if(id!=null && peers.remove(id,c)) {
                 incarnations.remove(id);
                 world.removeOwner(id);
+                entities.remove(id);
                 if(id.equals(primary)) primary=null;
                 broadcast(Wire.of("runtime_left","coordinator",null,Map.of("runtime",id)).encode());
             }
@@ -83,6 +86,23 @@ public final class CoordinatorCore {
                 case "ack" -> { if(m.target()==null || m.target().equals("*")) throw new IllegalArgumentException("ack needs a target"); relay(c,m); }
                 case "player" -> { if(!id.equals(primary)) throw new IllegalArgumentException("only primary owns the player"); relay(c,m); }
                 case "interaction_result", "gui" -> { toPrimary(id,m); MmlfLog.debug("gui","relayed",Map.of("type",m.type(),"source",id)); }
+                case "entities" -> {
+                    Entities snapshot=m.body(Entities.class);
+                    if(snapshot.owner()==null || !snapshot.owner().equals(id) || snapshot.entities()==null) throw new IllegalArgumentException("entities must be the sender's own");
+                    Set<String> ids=new HashSet<>(); for(EntityState e:snapshot.entities()) if(e!=null && e.id()!=null) ids.add(e.id());
+                    entities.put(id,Set.copyOf(ids));
+                    relay(c,m);
+                }
+                case "player_damage" -> {
+                    PlayerDamage damage=m.body(PlayerDamage.class);
+                    if(!ownsEntity(id,damage.attacker()) || !(damage.amount()>0) || damage.amount()>1000) throw new IllegalArgumentException("damage must come from the sender's own entity");
+                    toPrimary(id,m);
+                }
+                case "player_xp" -> {
+                    int amount=m.body(PlayerExperience.class).amount();
+                    if(amount<=0 || amount>100_000) throw new IllegalArgumentException("invalid experience");
+                    toPrimary(id,m);
+                }
                 case "gui_input" -> fromPrimary(id,m);
                 case "inventory" -> { if(id.equals(primary)) fromPrimary(id,m); else toPrimary(id,m); }
                 default -> throw new IllegalArgumentException("unknown message type");
@@ -94,7 +114,8 @@ public final class CoordinatorCore {
         }
         }
     }
-    /** Every open connection, registered or not, as the WebSocket server's broadcast did. */
+    private boolean ownsEntity(String runtime,String entity) { return entity!=null && entities.getOrDefault(runtime,Set.of()).contains(entity); }
+    /** Every open connection, registered or not. */
     private void broadcast(String frame) { for(Peer p:connections) p.send(frame); }
     private void beginRay(String source,Wire m) {
         if (!source.equals(primary)) throw new IllegalArgumentException("only primary can initiate interaction");
@@ -117,6 +138,11 @@ public final class CoordinatorCore {
     private void collectHit(String source,Wire m) {
         RayHit hit=m.body(RayHit.class); Pending p=pending.get(hit.actionId());
         if(p==null || !p.expected.contains(source) || p.hits.containsKey(source)) throw new IllegalArgumentException("unexpected ray result");
+        // The primary's own entities are its world's; any other runtime may only answer with an entity it reported.
+        if(hit.entityHit() && !hit.miss() && !source.equals(primary) && !ownsEntity(source,hit.entity())) {
+            MmlfLog.warn("interaction","unowned_entity_hit",Map.of("actionId",hit.actionId(),"runtime",source,"entity",hit.entity()));
+            hit=new RayHit(hit.actionId(),null,0,0,0,0,0,"UP",0,0,0,true);
+        }
         if(!hit.miss() && (!Double.isFinite(hit.distance()) || hit.distance()<0 || hit.distance()>p.request.reach()))
             throw new IllegalArgumentException("invalid hit distance");
         if(!hit.miss() && hit.objectId()!=null && !world.valid(source,hit)) throw new IllegalArgumentException("unowned or stale target");
@@ -125,14 +151,14 @@ public final class CoordinatorCore {
         pending.remove(hit.actionId());
         Map.Entry<String,RayHit> best=p.hits.entrySet().stream().filter(e->!e.getValue().miss()).min(Comparator.comparingDouble(e->e.getValue().distance())).orElse(null);
         if(best==null) {MmlfLog.debug("interaction","no_target",Map.of("actionId",hit.actionId(),"action",String.valueOf(p.request.action()),"cameraId",p.request.pose().cameraId()));return;}
-        if(best.getValue().objectId()==null && !best.getKey().equals(primary)) {MmlfLog.debug("interaction","unindexed_target",Map.of("actionId",hit.actionId(),"hitOwner",best.getKey(),"position",best.getValue().x()+","+best.getValue().y()+","+best.getValue().z()));return;}
+        if(best.getValue().objectId()==null && !best.getValue().entityHit() && !best.getKey().equals(primary)) {MmlfLog.debug("interaction","unindexed_target",Map.of("actionId",hit.actionId(),"hitOwner",best.getKey(),"position",best.getValue().x()+","+best.getValue().y()+","+best.getValue().z()));return;}
         String destination=best.getKey(); RayHit routedHit=best.getValue();
         var remoteItem=RemoteItemRef.parse(p.request.heldItem());
         if("use".equals(p.request.action()) && remoteItem.isPresent()) {
             String owner=remoteItem.get().owner();
             if(!peers.containsKey(owner)) throw new IllegalArgumentException("item runtime offline");
             if(!owner.equals(destination)) {
-                if(routedHit.objectId()!=null) throw new IllegalArgumentException("cross-owner mod-item interaction unsupported");
+                if(routedHit.objectId()!=null || routedHit.entityHit()) throw new IllegalArgumentException("cross-owner mod-item interaction unsupported");
                 destination=owner;
             }
         }

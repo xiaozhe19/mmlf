@@ -74,12 +74,12 @@ class VersionProfileTest {
   var fabric=VersionProfile.find(root,VersionProfile.Loader.FABRIC,"1.21.1");
   assertEquals("1.21.1",fabric.getFirst().minecraftVersion());
 
-  var missing=assertThrows(IllegalStateException.class,()->Manager.remoteVersion(root,"neoforge","1.21.1"));
+  var missing=assertThrows(IllegalStateException.class,()->ReleaseSupport.remoteVersion(root,"neoforge","1.21.1"));
   assertTrue(missing.getMessage().contains("补全"));
   VersionProfile chosen=VersionProfile.load(root,"neoforge-21.1.265");
   for(Path file:chosen.missingFiles()) touch(file);
-  assertEquals("neoforge-21.1.265",Manager.remoteVersion(root,"neoforge","1.21.1").id());
-  var none=assertThrows(IllegalStateException.class,()->Manager.remoteVersion(root,"neoforge","1.21.4"));
+  assertEquals("neoforge-21.1.265",ReleaseSupport.remoteVersion(root,"neoforge","1.21.1").id());
+  var none=assertThrows(IllegalStateException.class,()->ReleaseSupport.remoteVersion(root,"neoforge","1.21.4"));
   assertTrue(none.getMessage().contains("NeoForge"));
  }
 
@@ -87,18 +87,18 @@ class VersionProfileTest {
   Path mods=root.resolve("mods"); Files.createDirectories(mods);
   jar(mods.resolve("other.jar"),"META-INF/neoforge.mods.toml");
   jar(mods.resolve("fabric-only.jar"),"fabric.mod.json");
-  assertThrows(IllegalStateException.class,()->Manager.remoteMods(mods,"neoforge"));
+  assertThrows(IllegalStateException.class,()->ReleaseSupport.remoteMods(mods,"neoforge"));
   jar(mods.resolve("mmlf-neoforge.jar"),"META-INF/neoforge.mods.toml","dev/mmlf/bridge/BridgeCore.class");
-  var found=Manager.remoteMods(mods,"neoforge");
+  var found=ReleaseSupport.remoteMods(mods,"neoforge");
   assertEquals(List.of("mmlf-neoforge.jar","other.jar"),found.stream().map(p->p.getFileName().toString()).toList());
   Path game=root.resolve("session/neoforge");
   Files.createDirectories(root.resolve("config/sub")); Files.writeString(root.resolve("config/sub/a.toml"),"x=1");
   Files.writeString(root.resolve("options.txt"),String.join(System.lineSeparator(),"lang:zh_cn","onboardAccessibility:true"));
-  Manager.stage(found,root,game);
+  ReleaseSupport.stage(found,root,game);
   assertEquals(List.of("lang:zh_cn","onboardAccessibility:false"),Files.readAllLines(game.resolve("options.txt")));
   assertTrue(Files.isRegularFile(game.resolve("mods/mmlf-neoforge.jar")));
   Files.delete(mods.resolve("other.jar"));
-  Manager.stage(Manager.remoteMods(mods,"neoforge"),root,game);
+  ReleaseSupport.stage(ReleaseSupport.remoteMods(mods,"neoforge"),root,game);
   assertFalse(Files.exists(game.resolve("mods/other.jar")));
   assertTrue(Files.isRegularFile(mods.resolve("mmlf-neoforge.jar")));
   assertEquals("x=1",Files.readString(game.resolve("config/sub/a.toml")));
@@ -107,20 +107,20 @@ class VersionProfileTest {
  @Test void keepsOnlyRecentSessions() throws Exception {
   Path runtime=root.resolve("sessions");
   for(int i=0;i<4;i++) { Path dir=runtime.resolve("session-"+i); touch(dir.resolve("x.log")); dir.toFile().setLastModified(1_000_000L*(i+1)); }
-  Manager.removeOldSessions(runtime);
+  ReleaseSupport.removeOldSessions(runtime);
   try(var left=Files.list(runtime)) { assertEquals(Set.of("session-2","session-3"),new HashSet<>(left.map(p->p.getFileName().toString()).toList())); }
  }
 
  @Test void remoteFailureNamesTheCrashCause() throws Exception {
   Path game=root.resolve("fabric"), log=root.resolve("fabric.log");
-  assertTrue(Manager.remoteFailure("Fabric",1,game,log,0).contains("退出码 1"));
+  assertTrue(ReleaseSupport.remoteFailure("Fabric",1,game,log,0).contains("退出码 1"));
   Files.createDirectories(game.resolve("crash-reports"));
   Files.writeString(game.resolve("crash-reports/crash-1.txt"),String.join(System.lineSeparator(),
    "---- Minecraft Crash Report ----","Description: Initializing game","","java.lang.RuntimeException: Mixin transformation failed",
    "Caused by: org.spongepowered.asm.mixin.throwables.MixinApplyError: outer","Caused by: InvalidInjectionException: could not find isKeyDown",
    "A detailed walkthrough of the error","Caused by: later duplicate"));
-  String text=Manager.remoteFailure("Fabric",1,game,log,0);
-  assertFalse(Manager.remoteFailure("Fabric",1,game,log,System.currentTimeMillis()+60_000).contains("crash-1.txt"));
+  String text=ReleaseSupport.remoteFailure("Fabric",1,game,log,0);
+  assertFalse(ReleaseSupport.remoteFailure("Fabric",1,game,log,System.currentTimeMillis()+60_000).contains("crash-1.txt"));
   assertTrue(text.contains("Initializing game") && text.contains("could not find isKeyDown") && !text.contains("later duplicate") && text.contains("crash-1.txt"),text);
  }
 

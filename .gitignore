@@ -39,13 +39,9 @@ out/
 .DS_Store
 Thumbs.db
 
-# 第三方 Mod 由 scripts/fetch-demo-mods.ps1 按 manifest 下载校验，不入库
-mmlf/mods/*.jar
-
-# 兼容性测试 Mod 由 scripts/compat 解析、下载、校验，不入库
-mmlf/compat/jars/
-mmlf/compat/stage/
-mmlf/compat/results/
+# 运行配置、演示场景、Mod 清单与兼容性配置不参与构建，不入库
+/config/
+/mmlf/
 
 # 本地代码索引、运行时提取的原生库与截图
 /.codegraph/
