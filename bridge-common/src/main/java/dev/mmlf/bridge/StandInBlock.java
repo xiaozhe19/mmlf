@@ -57,6 +57,7 @@ public final class StandInBlock extends Block {
     @Override protected VoxelShape getShape(BlockState state,BlockGetter level,BlockPos pos,CollisionContext context) { return Shapes.empty(); }
     @Override protected VoxelShape getCollisionShape(BlockState state,BlockGetter level,BlockPos pos,CollisionContext context) {
         VoxelShape shape=Occupancy.collision(level,pos);
+        if(shape==null) shape=SharedWorld.collision(level,pos);
         return shape!=null ? shape : state.getValue(SOLID) ? Shapes.block() : Shapes.empty();
     }
     @Override protected VoxelShape getOcclusionShape(BlockState state,BlockGetter level,BlockPos pos) { return state.getValue(SOLID) ? Shapes.block() : Shapes.empty(); }

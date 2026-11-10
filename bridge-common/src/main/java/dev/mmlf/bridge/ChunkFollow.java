@@ -43,6 +43,7 @@ public final class ChunkFollow {
 
     /** Background, server thread: a chunk holds objects of this runtime (or no longer does). */
     static void own(String dimension,int x,int z,boolean has) {
+        SharedWorld.own(dimension,x,z,has);
         if(!enabled() || BridgeCore.isPrimary()) return;
         if(has) interest.add(key(dimension,x,z)); else interest.remove(key(dimension,x,z));
     }

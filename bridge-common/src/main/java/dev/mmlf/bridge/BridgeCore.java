@@ -159,9 +159,11 @@ public final class BridgeCore {
             InventoryBridge.initialize(link.id,primary);
             link.start();
             if(primary) SessionStatus.launched(remoteOf(id),session.root().resolve(remoteOf(id)+".log"));
+            if(primary) SharedWorld.publish(session.identity());
             RuntimeContext context=RuntimeContext.current();
             RuntimeClient joined=link;
-            Runnable release=()->{ joined.close(); try { if(poseFile!=null) poseFile.close(); } catch(java.io.IOException ignored) {} };
+            String identity=session.identity(); boolean hosting=primary;
+            Runnable release=()->{ if(hosting) SharedWorld.withdraw(identity); joined.close(); try { if(poseFile!=null) poseFile.close(); } catch(java.io.IOException ignored) {} };
             // In-JVM, this runtime ends long before the JVM: its backend runs the clean-up once its game has returned.
             if(context.inJvm()) dev.mmlf.common.InJvm.registry().put(dev.mmlf.launcher.runtime.InJvmBackend.cleanupKey(context.loader()),release);
             else Runtime.getRuntime().addShutdownHook(new Thread(release,"mmlf-shutdown"));
@@ -186,7 +188,7 @@ public final class BridgeCore {
         } else if(message.type().equals("runtime_left")) {
             String id=message.data().get("runtime").getAsString(); readyRuntimes.remove(id); if(id.equals(session.primary())) playerVersion=0; Boundary.forgetRemote(id); Occupancy.forget(id); RemoteEntities.forget(id); RedstoneBridge.runtimeLeft(id); mc.execute(()->{peers.remove(id); GuiClient.runtimeLeft(id); RemoteCatalog.forget(id); if(id.equals(session.primary())) GuiHost.primaryLost("primary_left"); RemoteLayer removed=remoteLayers.remove(id); if(removed!=null) removed.close(); collisions.values().removeIf(v->v.owner().equals(id)); if(id.equals(session.primary())) { lastRemotePose=null; poseSequence=0; poseSourceNanos=0; yawRate=pitchRate=0; predictionLead.reset(); adaptiveOverscan.reset(); }});
         } else if(message.type().equals("disconnected")) {
-            worldReadySent=false; readyRuntimes.clear(); playerVersion=0; Boundary.forgetAllRemote(); Occupancy.forget(null); RemoteEntities.forget(null); RedstoneBridge.disconnected();
+            worldReadySent=false; readyRuntimes.clear(); playerVersion=0; Boundary.forgetAllRemote(); Occupancy.forget(null); RemoteEntities.forget(null); SharedWorld.detach(); RedstoneBridge.disconnected();
             mc.execute(()->{GuiClient.disconnected(); GuiHost.primaryLost("disconnected");peers.clear(); collisions.clear(); remoteLayers.values().forEach(RemoteLayer::close); remoteLayers.clear(); displayFrame=null; displayPixels=null; lastRemotePose=null; poseSequence=0; poseSourceNanos=0; yawRate=pitchRate=0; predictionLead.reset(); adaptiveOverscan.reset();});
         } else if(message.type().equals("ray_request")) {
             RayRequest request=message.body(RayRequest.class); mc.execute(()->raycast(request));
@@ -299,6 +301,7 @@ public final class BridgeCore {
         else if(releaseRuntime!=null) SessionStatus.tick(mc,false,false,false);
         if(link!=null) DemoScene.tick(mc,session,link.id);
         if(link!=null && link.ready()) { if(primary) RemoteEntities.push(mc); else RemoteEntities.publish(mc,link.id); }
+        if(link!=null) { if(primary) SharedWorld.primaryTick(mc,session); else SharedWorld.tick(); }
         if(link!=null && link.ready() && WorldFollow.enabled(session)) WorldFollow.tick(mc,primary);
         if(link!=null && !primary) {
             if(!backgroundMusicStopped) {
@@ -753,6 +756,12 @@ public final class BridgeCore {
             if(connection!=null) connection.send(new net.minecraft.network.protocol.game.ServerboundPlayerCommandPacket(player,action.secondaryUse()?net.minecraft.network.protocol.game.ServerboundPlayerCommandPacket.Action.PRESS_SHIFT_KEY:net.minecraft.network.protocol.game.ServerboundPlayerCommandPacket.Action.RELEASE_SHIFT_KEY));
             player.setShiftKeyDown(action.secondaryUse());
             var outcome=mc.gameMode.useItemOn(player,hand,nativeHit);
+            // As vanilla's startUseItem: a block that passes leaves the click to the held item (a bucket, a spawn egg's
+            // fluid check, food), which acts by the player's own look ray.
+            if(outcome==net.minecraft.world.InteractionResult.PASS && !player.getItemInHand(hand).isEmpty()) {
+                var used=mc.gameMode.useItem(player,hand);
+                if(used.consumesAction()) { outcome=used; mc.gameRenderer.itemInHandRenderer.itemUsed(hand); }
+            }
             if(outcome.shouldSwing()) player.swing(hand);
             boolean success=outcome.consumesAction();
             MmlfLog.info("interaction","native_result",Map.of("actionId",action.actionId(),"action","use","path","client","result",outcome.name(),"position",pos.toShortString(),"state",state.toString(),"screen",mc.screen==null?"none":mc.screen.getClass().getName()));

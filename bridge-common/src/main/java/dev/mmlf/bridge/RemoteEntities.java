@@ -71,7 +71,8 @@ public final class RemoteEntities {
      * mod block drops (a mod ore's diamonds) are this runtime's like the block. Returns whether a scope was opened.
      */
     public static boolean beginBlockDrops(net.minecraft.world.level.block.state.BlockState state,net.minecraft.core.BlockPos pos) {
-        if(!owner() || droppingSource()!=null || state==null || !BridgeCore.renderOwned(state,pos)) return false;
+        // Its own blocks, and any block its own things break (a farmer's crop, a remote drill's stone).
+        if(!owner() || droppingSource()!=null || state==null || !(SharedWorld.ownBlock(state,pos) || SharedWorld.authored())) return false;
         dropping.set(new Scope(String.valueOf(BuiltInRegistries.BLOCK.getKey(state.getBlock())),System.nanoTime()));
         return true;
     }
@@ -83,6 +84,8 @@ public final class RemoteEntities {
         if(source==null && owner() && (entity instanceof net.minecraft.world.entity.item.ItemEntity || entity instanceof net.minecraft.world.entity.ExperienceOrb))
             source=entity.level().getEntities(entity,entity.getBoundingBox().inflate(1.0),
                 e->e instanceof net.minecraft.world.entity.LivingEntity living && living.isDeadOrDying() && interactive(e,false)).stream().findFirst().map(RemoteEntities::typeOf).orElse(null);
+        // Whatever this runtime's own things create while they act (an explosion's drops, an arrow) is theirs too.
+        if(source==null && owner() && SharedWorld.authored()) source="authored";
         if(source==null) return;
         claim(entity.getUUID());
         MmlfLog.info("entity","drop_claimed",Map.of("source",source,"drop",typeOf(entity)));
@@ -138,6 +141,9 @@ public final class RemoteEntities {
             list.add(new EntityState(e.getUUID().toString(),String.valueOf(BuiltInRegistries.ENTITY_TYPE.getKey(e.getType())),e.getX(),e.getY(),e.getZ(),e.getBbWidth(),e.getBbHeight(),e.isPushable()));
         }
         ownedBoxes=List.copyOf(boxes);
+        var chunks=new HashSet<String>(); String dimension=mc.level.dimension().location().toString();
+        for(EntityState e:list) chunks.add(dimension+"@"+(((int)Math.floor(e.x()))>>4)+","+(((int)Math.floor(e.z()))>>4));
+        SharedWorld.entityChunks(chunks);
         if(++publishTick%2!=0) return;
         if(list.isEmpty() && lastEmpty) return;
         lastEmpty=list.isEmpty();

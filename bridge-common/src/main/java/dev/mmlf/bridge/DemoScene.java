@@ -102,6 +102,27 @@ public final class DemoScene {
  private static <T extends Comparable<T>> net.minecraft.world.level.block.state.BlockState withValue(net.minecraft.world.level.block.state.BlockState state,net.minecraft.world.level.block.state.properties.Property<T> property,String value) {
   return property.getValue(value).map(v->state.setValue(property,v)).orElseThrow(()->new IllegalStateException("Invalid scenario property "+property.getName()+"="+value));
  }
+ /** Set on the server thread once this runtime's part of the scene is placed. */
+ private static volatile boolean applied;
+ /** Whether this runtime's world is in its final shape: no scene in this session, or its scene placed. */
+ static boolean settled(Session session) { return session==null || !Files.isRegularFile(session.root().resolve("scenario.json")) || applied; }
+ /**
+  * Client thread: whether this runtime's client world already shows its placed scene, floor included. Its server's
+  * block updates reach the client seconds later while the fresh world is still loading or paused (a resource reload).
+  */
+ static boolean shown(Minecraft mc,Session session) {
+  if(!settled(session)) return false;
+  Scene placed=scene;
+  if(placed==null || sceneSession!=session) return session==null || !Files.isRegularFile(session.root().resolve("scenario.json"));
+  var level=mc.level; if(level==null) return false;
+  if(!(Experiments.THIN_WORLD && !BridgeCore.isPrimary()) && !level.getBlockState(new BlockPos(0,99,4)).is(net.minecraft.world.level.block.Blocks.SMOOTH_STONE)) return false;
+  String runtime=BridgeCore.isPrimary()?session.primary():background(session);
+  for(Placement item:placed.placements()) {
+   if(!owner(item,session).equals(runtime) || !BuiltInRegistries.BLOCK.containsKey(ResourceLocation.parse(block(item,session)))) continue;
+   if(level.getBlockState(new BlockPos(item.x(),item.y(),item.z())).isAir()) return false;
+  }
+  return true;
+ }
  public static void tick(Minecraft mc,Session session,String runtime) {
   if(session==null || !Files.isRegularFile(session.root().resolve("scenario.json"))) return;
   if(prepared && !hidden && !BridgeCore.isPrimary() && RuntimeContext.current().hiddenWindow()) {
@@ -195,8 +216,8 @@ public final class DemoScene {
     var server=mc.getSingleplayerServer();
     server.execute(()->{
      var level=server.overworld();
-     // Manual sessions start at 10d (sunrise, a low sun with long shadows); the self-tests keep noon for comparable screenshots.
-     level.setDayTime(Files.exists(session.root().resolve("self-test"))?6000:240000);level.setWeatherParameters(0,0,false,false);
+     // Manual sessions start at 10d+2000: a low morning sun with long shadows, within villager work hours (the scene farmer works at its composter). The self-tests keep noon.
+     level.setDayTime(Files.exists(session.root().resolve("self-test"))?6000:242000);level.setWeatherParameters(0,0,false,false);
      level.getGameRules().getRule(GameRules.RULE_DAYLIGHT).set(false,server);
      level.getGameRules().getRule(GameRules.RULE_WEATHER_CYCLE).set(false,server);
      // Scene mobs need a difficulty that keeps hostile ones; nothing else may spawn among them.
@@ -250,6 +271,7 @@ public final class DemoScene {
      var player=server.getPlayerList().getPlayers().getFirst();
      player.teleportTo(0.5,100,4.5); player.setYRot(180); player.setXRot(10);
      mc.execute(()->{mc.player.setPos(0.5,100,4.5);mc.player.setYRot(180);mc.player.setXRot(10);});
+     applied=true;
      System.out.println("MMLF SCENE READY runtime="+runtime);
     });
    } catch(Exception e) {throw new IllegalStateException("MMLF scenario failed",e);}

@@ -53,6 +53,7 @@ public final class RedstoneBridge {
     static void tick(MinecraftServer server) {
         Boundary.tick(server);
         ChunkFollow.tick(server);
+        SharedWorld.serverTick(server);
         ContainerBridge.tick(server);
         List<SignalState> boundary=new ArrayList<>();
         Set<Boundary.At> seen=new HashSet<>();
