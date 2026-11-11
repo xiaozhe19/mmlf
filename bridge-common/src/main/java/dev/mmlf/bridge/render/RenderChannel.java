@@ -55,4 +55,33 @@ public final class RenderChannel {
         cursor.modified=modified; cursor.size=size;
         return data;
     }
+
+    // ---- ordered channels (one JVM only): every value in order, for changes that build on the previous ones ----
+
+    /** Whether ordered channels are available: runtimes in one JVM. */
+    public static boolean ordered() { return BridgeCore.session()!=null && memory(); }
+    @SuppressWarnings("unchecked")
+    private static java.util.concurrent.ConcurrentLinkedQueue<byte[]> queue(String runtime,String name) {
+        return (java.util.concurrent.ConcurrentLinkedQueue<byte[]>)InJvm.registry().computeIfAbsent(key(runtime,name+"#queue"),k->new java.util.concurrent.ConcurrentLinkedQueue<byte[]>());
+    }
+    @SuppressWarnings("unchecked")
+    private static java.util.concurrent.atomic.AtomicBoolean restart(String runtime,String name) {
+        return (java.util.concurrent.atomic.AtomicBoolean)InJvm.registry().computeIfAbsent(key(runtime,name+"#restart"),k->new java.util.concurrent.atomic.AtomicBoolean());
+    }
+    /** This runtime appends a value to {@code name}; false when the reader fell this far behind (the writer then starts over). */
+    public static boolean append(String name,byte[] data,int limit) {
+        var queue=queue(BridgeCore.runtimeId(),name);
+        if(queue.size()>=limit) { queue.clear(); return false; }
+        queue.add(data); return true;
+    }
+    /** This runtime: whether the reader asked for {@code name} from the start (whole state, nothing before it matters); clears the request. */
+    public static boolean restartRequested(String name) { return restart(BridgeCore.runtimeId(),name).getAndSet(false); }
+    /** Reader: drops what is queued and asks {@code runtime} to start {@code name} over with its whole state. */
+    public static void requestRestart(String runtime,String name) { queue(runtime,name).clear(); restart(runtime,name).set(true); }
+    /** Reader: {@code runtime}'s values of {@code name} in order, each once. */
+    public static java.util.List<byte[]> drain(String runtime,String name) {
+        var queue=queue(runtime,name); var out=new java.util.ArrayList<byte[]>();
+        for(byte[] value;(value=queue.poll())!=null;) out.add(value);
+        return out;
+    }
 }

@@ -32,6 +32,8 @@ public final class SessionHost implements AutoCloseable {
 
     /** Development session under the project's {@code runtime} directory, with the project's demo scene. */
     public static SessionHost create(Path root,String primary,boolean selfTest) throws Exception {
+        // Real-world sessions have no scene: the primary plays its own saves and the background follows them.
+        if(realWorld()!=null) return create(root.resolve("runtime"),null,primary,selfTest);
         // Manual sessions use the visual scene (no redstone fixtures) when present; the self-tests need the full one.
         Path visual=root.resolve("config/visual-scene.json");
         Path sceneConfig=!selfTest && Files.isRegularFile(visual) ? visual : root.resolve("config/demo-scene.json");
@@ -63,6 +65,28 @@ public final class SessionHost implements AutoCloseable {
         if(selfTest) Files.createFile(dir.resolve("self-test"));
         MmlfLog.info("launcher","coordinator_started",Map.of("endpoint","IN_JVM"));
         return new SessionHost(core,port,dir,session);
+    }
+
+    /**
+     * Development real-world mode ({@code MMLF_WORLD}): null without it; otherwise {@code "menu"} (the player picks or
+     * creates a save on the title screen) or the name of a save the primary opens, creating a normal survival world the
+     * first time.
+     */
+    public static String realWorld() {
+        String value=System.getenv("MMLF_WORLD");
+        if(value==null || value.isBlank()) return null;
+        value=value.trim();
+        if(value.contains("/") || value.contains("\\") || value.contains("..")) throw new IllegalArgumentException("MMLF_WORLD must be a save name: "+value);
+        return value;
+    }
+    /**
+     * Game directory of a development runtime. Demo sessions give each runtime a fresh one in the session; real-world
+     * sessions keep a background's directory across sessions, since its save holds the blocks only it owns. It depends
+     * on the primary, because a save is only followed from the primary that created it.
+     */
+    public static Path gameDirectory(Path root,SessionHost session,String runtime) {
+        if(Files.isRegularFile(session.directory().resolve("scenario.json")) || realWorld()==null) return session.directory().resolve(runtime);
+        return root.resolve("runtime").resolve("real").resolve(session.session().primary()+"-primary").resolve(runtime);
     }
 
     /** NeoForge's early loading window opens before any mod runs; a background one must not show it. */

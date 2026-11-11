@@ -27,6 +27,27 @@ class WorldIndexTest {
   assertNotEquals(first.id(),second.id());
   assertFalse(index.valid("neo",hit),"a hit on the broken block does not reach the new one");
  }
+ @Test void chunkBlocksAreReplacedPerChunkAndIndexedForHits() {
+  WorldIndex index=new WorldIndex();
+  var ore=new BlockKind("mod:ore",Map.of());
+  index.updateBlocks("neo",new ChunkBlocks("neo","overworld",-1,2,java.util.List.of(ore),new int[][]{{packInChunk(-3,-40,37)}}));
+  assertTrue(index.ownsBlock("neo","overworld",-3,-40,37));
+  assertFalse(index.ownsBlock("neo","overworld",-3,-41,37));
+  assertFalse(index.ownsBlock("fabric","overworld",-3,-40,37));
+  assertThrows(IllegalArgumentException.class,()->index.updateBlocks("fabric",new ChunkBlocks("neo","overworld",0,0,java.util.List.of(),new int[0][])));
+  index.updateBlocks("neo",new ChunkBlocks("neo","overworld",-1,2,java.util.List.of(),new int[0][]));
+  assertFalse(index.ownsBlock("neo","overworld",-3,-40,37),"an empty update removes the chunk's blocks");
+  index.updateBlocks("neo",new ChunkBlocks("neo","overworld",-1,2,java.util.List.of(ore),new int[][]{{packInChunk(-3,-40,37)}}));
+  assertEquals(1,index.blocksSnapshot().size());
+  index.removeOwner("neo");
+  assertTrue(index.blocksSnapshot().isEmpty());
+ }
+ @Test void positionsPackWithinTheirChunk() {
+  int p=packInChunk(-3,-40,37);
+  assertEquals(-3,unpackX(-1,p)); assertEquals(-40,unpackY(p)); assertEquals(37,unpackZ(2,p));
+  int q=packInChunk(31,319,0);
+  assertEquals(31,unpackX(1,q)); assertEquals(319,unpackY(q)); assertEquals(0,unpackZ(0,q));
+ }
  @Test void depthUsesStandardOpenGlConvention() {
   assertEquals(0.1,Depth.linear(0,0.1,100),1e-9);
   assertEquals(100,Depth.linear(1,0.1,100),1e-8);

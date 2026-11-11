@@ -5,6 +5,7 @@
   "compatibilityLevel": "JAVA_21",
   "client": [
     "CameraMixin",
+    "TitleScreenMixin",
     "BackgroundMusicMixin",
     "GameRendererMixin",
     "ItemInHandRendererMixin",
@@ -24,6 +25,7 @@
     "GuiItemMixin",
     "SectionCompilerMixin",
     "ClientLevelMixin",
+    "TerrainParticleMixin",
     "TextureAtlasMixin",
     "SingleFileMixin",
     "LevelRendererMixin",
@@ -62,6 +64,7 @@
   "mixins": [
     "EntityCollisionMixin",
     "ServerTickMixin",
+    "ChunkMapAccessor",
     "ChunkMapMixin",
     "LevelChunkMixin",
     "BlockStateSignalMixin",
@@ -75,6 +78,14 @@
     "ServerLevelClockMixin",
     "ItemEntityAccessor",
     "FollowerMovementMixin",
+    "HollowGenerationMixin",
+    "StandInItemMixin",
+    "StandInTradeMixin",
+    "StandInCartographyMixin",
+    "ServerSaveMixin",
+    "CoGenerationMixin",
+    "HollowFeatureFilterMixin",
+    "SectionWriteMixin",
     "ServerConnectionAccessor"
   ]
 }

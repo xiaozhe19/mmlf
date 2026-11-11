@@ -21,7 +21,7 @@ public final class DevRunSpecs {
 
     /** Stages the project's third-party mods for one runtime into its session game directory. */
     public static Path prepareGameDirectory(SessionHost session,Path root,String runtime) throws Exception {
-        Path game=session.directory().resolve(runtime);
+        Path game=SessionHost.gameDirectory(root,session,runtime);
         SessionHost.stageMods(SessionHost.modsSource(root),SessionHost.LOADERS.get(runtime),game.resolve("mods"));
         // Explicit test-only shader pack: the remote directory is newly created for this session.
         String testPack=System.getenv("MMLF_TEST_SHADERPACK");

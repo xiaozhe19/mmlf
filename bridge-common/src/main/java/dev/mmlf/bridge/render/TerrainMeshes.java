@@ -31,11 +31,28 @@ public final class TerrainMeshes {
     private record State(long version,Map<Long,Section> sections) {}
     private static volatile State state=new State(0,Map.of());
     private static volatile boolean dirty;
+    /** Sections whose received layers or stand-in cells changed since the last refresh; the others are kept as they are. */
+    private static final Set<Long> dirtySections=java.util.concurrent.ConcurrentHashMap.newKeySet();
+    /** Everything is rebuilt (a new scene, a changed atlas). */
     public static void invalidate() { dirty=true; }
+    /** Only these sections ({@link SectionPos#asLong}) are rebuilt. */
+    public static void invalidateSections(Collection<Long> sections) { dirtySections.addAll(sections); }
+    /** The section holding this block is rebuilt (a stand-in written or removed there). */
+    public static void invalidateBlock(BlockPos pos) { dirtySections.add(SectionPos.asLong(pos)); }
+    /** A client chunk arrived with its stand-ins: its sections are rebuilt. */
+    public static void chunkLoaded(ClientLevel level,net.minecraft.world.level.ChunkPos pos) {
+        for(int y=level.getMinSection();y<level.getMaxSection();y++) dirtySections.add(SectionPos.asLong(pos.x,y,pos.z));
+    }
     static void refresh(Minecraft mc,RenderSectionStore.Snapshot snapshot,int width,int height) {
-        if(!TerrainModels.enabled() || !dirty || snapshot==null) return;
-        dirty=false;
-        if(!TerrainAtlas.ready || !rebuild(mc,snapshot,width,height)) clear();
+        if(!TerrainModels.enabled() || snapshot==null) return;
+        Set<Long> only=null;
+        if(dirty) { dirty=false; dirtySections.clear(); }
+        else {
+            if(dirtySections.isEmpty()) return;
+            only=new HashSet<>();
+            for(var it=dirtySections.iterator();it.hasNext();) { only.add(it.next()); it.remove(); }
+        }
+        if(!TerrainAtlas.ready || !rebuild(mc,snapshot,width,height,only)) clear();
     }
     public static Map<String,List<BakedQuad>> at(BlockPos pos) {
         Section section=state.sections().get(SectionPos.asLong(SectionPos.blockToSectionCoord(pos.getX()),SectionPos.blockToSectionCoord(pos.getY()),SectionPos.blockToSectionCoord(pos.getZ())));
@@ -47,7 +64,33 @@ public final class TerrainMeshes {
     private record Upload(long section,long version) {}
     /** Taken by a compile task before it reads {@link #at}; passed back to {@link #uploaded} with its result. */
     public static long version() { return state.version(); }
-    public static boolean hasSection(long section) { Section s=state.sections().get(section); return s!=null && Objects.equals(uploaded.get(section),s.version()); }
+    /**
+     * Whether the section's remote blocks are drawn as terrain: some compile of it is uploaded. While a newer content
+     * version is being compiled the previous upload keeps showing; drawing the fallback meshes on top of it as well
+     * made every remote block of the section flicker.
+     */
+    public static boolean hasSection(long section) { return state.sections().containsKey(section) && uploaded.containsKey(section); }
+    /**
+     * A terrain particle at a remote block (its stand-in at {@code pos}, or below it: landing and running particles
+     * name the position above the ground): the atlas bounds {u0,v0,u1,v1} of one of its converted quads, preferring the
+     * top face; null where none is known.
+     */
+    public static float[] particleBounds(ClientLevel level,BlockPos pos) {
+        for(BlockPos at:new BlockPos[]{pos,pos.below()}) {
+            if(!StandInBlock.is(level.getBlockState(at))) continue;
+            BakedQuad chosen=null;
+            for(var quads:at(at).values()) for(BakedQuad quad:quads) if(chosen==null || quad.getDirection()==Direction.UP && chosen.getDirection()!=Direction.UP) chosen=quad;
+            if(chosen==null) return null;
+            int[] data=chosen.getVertices();
+            float u0=Float.MAX_VALUE,v0=Float.MAX_VALUE,u1=-Float.MAX_VALUE,v1=-Float.MAX_VALUE;
+            for(int i=0;i<4;i++) {
+                float u=Float.intBitsToFloat(data[i*8+4]),v=Float.intBitsToFloat(data[i*8+5]);
+                u0=Math.min(u0,u); u1=Math.max(u1,u); v0=Math.min(v0,v); v1=Math.max(v1,v);
+            }
+            return new float[]{u0,v0,u1,v1};
+        }
+        return null;
+    }
     /** A compile that started at {@code compiledAt} holds the section's current content when that content is not newer. */
     public static void uploaded(long section,long compiledAt) {
         Section s=state.sections().get(section);
@@ -62,8 +105,11 @@ public final class TerrainMeshes {
         if(mc.level!=null) for(long key:old) mc.levelRenderer.setSectionDirty(SectionPos.x(key),SectionPos.y(key),SectionPos.z(key));
     }
 
-    /** Render thread; returns false without changing the published batches when the atlas cannot fit. */
-    static boolean rebuild(Minecraft mc,RenderSectionStore.Snapshot snapshot,int width,int height) {
+    /**
+     * Render thread; returns false without changing the published batches when the atlas cannot fit. {@code only}: the
+     * sections to rebuild, the others kept; null rebuilds all.
+     */
+    static boolean rebuild(Minecraft mc,RenderSectionStore.Snapshot snapshot,int width,int height,Set<Long> only) {
         long started=System.nanoTime();
         ClientLevel level=mc.level;
         if(level==null) return false;
@@ -74,11 +120,16 @@ public final class TerrainMeshes {
         var atlasKey=new AtlasKey(sprite.getU0(),sprite.getV0(),sprite.getU1(),sprite.getV1(),sprite.contents().width(),sprite.contents().height(),width,height);
         State previous=state;
         long version=previous.version()+1;
+        // A section kept as it is must have been converted for this atlas placement.
+        if(only!=null) for(Section kept:previous.sections().values()) if(!kept.atlas().equals(atlasKey)) { only=null; break; }
+        final Set<Long> selected=only;
         // Producers in a fixed order, so an unchanged section compares equal to its previous layers.
         var grouped=new HashMap<Long,List<RenderSectionStore.Layer>>();
-        snapshot.sections().entrySet().stream().sorted(Comparator.comparing(e->e.getKey().producer()))
+        snapshot.sections().entrySet().stream().filter(e->selected==null || selected.contains(e.getKey().section()))
+                .sorted(Comparator.comparing(e->e.getKey().producer()))
                 .forEach(e->grouped.computeIfAbsent(e.getKey().section(),k->new ArrayList<>()).addAll(e.getValue().layers()));
         var next=new HashMap<Long,Section>();
+        if(selected!=null) { next.putAll(previous.sections()); next.keySet().removeAll(selected); }
         var changed=new HashSet<Long>();
         int reused=0;
         for(var entry:grouped.entrySet()) {
@@ -113,12 +164,13 @@ public final class TerrainMeshes {
             changed.add(key);
         }
         var removed=new HashSet<>(previous.sections().keySet()); removed.removeAll(next.keySet());
+        if(selected!=null) removed.retainAll(selected);
         if(changed.isEmpty() && removed.isEmpty()) return true;
         state=new State(version,Map.copyOf(next));
         for(long key:removed) uploaded.remove(key);
         int cells=next.values().stream().mapToInt(s->s.cells().size()).sum();
-        dev.mmlf.common.MmlfLog.info("render.submission","terrain_meshes",Map.of("sections",next.size(),"cells",cells,"version",version,
-                "changed",changed.size(),"removed",removed.size(),"reused",reused,"rebuildMicros",(System.nanoTime()-started)/1000));
+        dev.mmlf.common.MmlfLog.sampled("render.submission","terrain_meshes",1000,Map.of("sections",next.size(),"cells",cells,"version",version,"partial",selected!=null,
+                "considered",grouped.size(),"changed",changed.size(),"removed",removed.size(),"reused",reused,"rebuildMicros",(System.nanoTime()-started)/1000));
         var dirty=new HashSet<>(removed); dirty.addAll(changed);
         for(long key:dirty) mc.levelRenderer.setSectionDirty(SectionPos.x(key),SectionPos.y(key),SectionPos.z(key));
         return true;

@@ -32,7 +32,7 @@ public abstract class LevelChunkMixin implements NeighborMirror.Overlaid {
   // The other runtime reads the primary's map wherever it has no block of its own (SharedWorld).
   BlockState shared=dev.mmlf.bridge.SharedWorld.read(chunk,pos,own);
   if(shared!=own || !mmlf$overlaid) return shared;
-  return dev.mmlf.bridge.Occupancy.read(chunk,pos,NeighborMirror.read(chunk,pos,own));
+  return NeighborMirror.read(chunk,pos,own);
  }
  @Inject(method="setBlockState",at=@At("RETURN"))
  private void mmlf$changed(BlockPos pos,BlockState state,boolean moved,CallbackInfoReturnable<BlockState> cir) {
@@ -47,5 +47,6 @@ public abstract class LevelChunkMixin implements NeighborMirror.Overlaid {
  @Inject(method="setLoaded",at=@At("TAIL"))
  private void mmlf$loaded(boolean loaded,CallbackInfo ci) {
   Boundary.chunk((LevelChunk)(Object)this,loaded);
+  dev.mmlf.bridge.SharedWorld.loaded((LevelChunk)(Object)this,loaded);
  }
 }

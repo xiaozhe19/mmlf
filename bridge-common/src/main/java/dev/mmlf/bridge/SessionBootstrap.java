@@ -26,7 +26,7 @@ final class SessionBootstrap {
             adopt(new RuntimeManager(host,new InJvmBackend(host)));
             List<String> others=new ArrayList<>(new TreeSet<>(DevRunSpecs.RUN_TASKS.keySet())); others.remove(runtime);
             long started=System.currentTimeMillis();
-            for(String other:others) ReleaseSupport.reportExit(manager,other,host.directory().resolve(other),started);
+            for(String other:others) ReleaseSupport.reportExit(manager,other,SessionHost.gameDirectory(project,host,other),started);
             if(solo()) System.out.println("MMLF: solo baseline (MMLF_SOLO); no other runtime started");
             else for(String other:others) manager.start(DevRunSpecs.inJvm(host,project,other));
             System.out.println("MMLF: hosting session as primary "+runtime+"; started "+(solo()?List.of():others)+" in "+host.directory());

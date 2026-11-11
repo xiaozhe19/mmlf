@@ -57,7 +57,7 @@ public final class RemoteEntities {
 
     /** Owner, server thread: an item an owned entity dropped is owned too. */
     public static void dropped(Entity source,Entity item) {
-        if(item!=null && owner() && interactive(source,false)) { claim(item.getUUID()); MmlfLog.info("entity","drop_claimed",Map.of("source",typeOf(source),"drop",typeOf(item))); }
+        if(item!=null && owner() && interactive(source,false)) { claim(item); MmlfLog.info("entity","drop_claimed",Map.of("source",typeOf(source),"drop",typeOf(item))); }
     }
     public static void beginDrops(Entity source) {
         if(!owner() || !interactive(source,false)) return;
@@ -87,7 +87,7 @@ public final class RemoteEntities {
         // Whatever this runtime's own things create while they act (an explosion's drops, an arrow) is theirs too.
         if(source==null && owner() && SharedWorld.authored()) source="authored";
         if(source==null) return;
-        claim(entity.getUUID());
+        claim(entity);
         MmlfLog.info("entity","drop_claimed",Map.of("source",source,"drop",typeOf(entity)));
     }
     private static boolean owner() { return !BridgeCore.isPrimary() && BridgeCore.connected(); }
@@ -106,6 +106,10 @@ public final class RemoteEntities {
 
     /** This runtime owns {@code entity} although its type is vanilla (scenes, mods that spawn vanilla mobs as theirs). */
     public static void claim(UUID entity) { claimed.add(entity); }
+    /** Entity tag saved with a claimed entity, so it is still this runtime's after the world is opened again. */
+    public static final String OWNED_TAG="mmlf_owned";
+    /** Server thread: claims {@code entity} for good; the tag is restored into {@link #claimed} as it ticks after a load. */
+    public static void claim(Entity entity) { claimed.add(entity.getUUID()); if(!entity.level().isClientSide()) entity.addTag(OWNED_TAG); }
     public static boolean claimed(UUID entity) { return claimed.contains(entity); }
 
     /** Whether this runtime acts for {@code entity}: the primary for its world's own, an owner for those it owns. */
@@ -142,7 +146,11 @@ public final class RemoteEntities {
         }
         ownedBoxes=List.copyOf(boxes);
         var chunks=new HashSet<String>(); String dimension=mc.level.dimension().location().toString();
-        for(EntityState e:list) chunks.add(dimension+"@"+(((int)Math.floor(e.x()))>>4)+","+(((int)Math.floor(e.z()))>>4));
+        // With the chunks around each, so an entity walking out of its chunk finds the primary's ground there too.
+        for(EntityState e:list) {
+            int cx=((int)Math.floor(e.x()))>>4,cz=((int)Math.floor(e.z()))>>4;
+            for(int dx=-1;dx<=1;dx++) for(int dz=-1;dz<=1;dz++) chunks.add(dimension+"@"+(cx+dx)+","+(cz+dz));
+        }
         SharedWorld.entityChunks(chunks);
         if(++publishTick%2!=0) return;
         if(list.isEmpty() && lastEmpty) return;

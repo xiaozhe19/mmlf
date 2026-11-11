@@ -94,7 +94,11 @@ public final class BridgeCore {
     }
     /** A vanilla block this runtime placed for its own scene belongs to it, like one it placed through interaction. */
     /** The primary owns every vanilla block anyway; a background owns those it placed itself (its scene, native uses). */
-    public static void ownVanilla(net.minecraft.server.level.ServerLevel level,net.minecraft.core.BlockPos pos) { if(primary) return; ownedVanilla.add(pos.immutable()); Boundary.claim(level,pos); }
+    public static void ownVanilla(net.minecraft.server.level.ServerLevel level,net.minecraft.core.BlockPos pos) { if(primary) return; ownedVanilla.add(pos.immutable()); OwnedVanillaStore.recorded(level.dimension().location().toString(),pos); Boundary.claim(level,pos); }
+    /** Background: an owned vanilla block of a reopened world ({@link OwnedVanillaStore}); published as its chunk loads. */
+    static void restoreOwnedVanilla(net.minecraft.core.BlockPos pos) { if(!primary) ownedVanilla.add(pos.immutable()); }
+    /** Background: its world closed; the next one has its own. */
+    static void forgetOwnedVanilla() { ownedVanilla.clear(); OwnedVanillaStore.closed(); }
     static boolean ownsVanilla(net.minecraft.core.BlockPos pos) { return ownedVanilla.contains(pos); }
     static java.util.Set<net.minecraft.core.BlockPos> ownedVanilla() { return ownedVanilla; }
     public static boolean renderOwned(net.minecraft.world.level.block.state.BlockState state,net.minecraft.core.BlockPos pos) {
@@ -160,10 +164,11 @@ public final class BridgeCore {
             link.start();
             if(primary) SessionStatus.launched(remoteOf(id),session.root().resolve(remoteOf(id)+".log"));
             if(primary) SharedWorld.publish(session.identity());
+            if(primary) CoGeneration.publish(session.identity()); else CoGeneration.publishBackground(session.identity());
             RuntimeContext context=RuntimeContext.current();
             RuntimeClient joined=link;
             String identity=session.identity(); boolean hosting=primary;
-            Runnable release=()->{ if(hosting) SharedWorld.withdraw(identity); joined.close(); try { if(poseFile!=null) poseFile.close(); } catch(java.io.IOException ignored) {} };
+            Runnable release=()->{ if(hosting) { SharedWorld.withdraw(identity); CoGeneration.withdraw(identity); } else CoGeneration.withdrawBackground(identity); joined.close(); try { if(poseFile!=null) poseFile.close(); } catch(java.io.IOException ignored) {} };
             // In-JVM, this runtime ends long before the JVM: its backend runs the clean-up once its game has returned.
             if(context.inJvm()) dev.mmlf.common.InJvm.registry().put(dev.mmlf.launcher.runtime.InJvmBackend.cleanupKey(context.loader()),release);
             else Runtime.getRuntime().addShutdownHook(new Thread(release,"mmlf-shutdown"));
@@ -180,15 +185,17 @@ public final class BridgeCore {
     private static void receive(Wire message) {
         Minecraft mc=Minecraft.getInstance();
         if(message.type().equals("object")) {ObjectState object=message.body(ObjectState.class); if(link!=null && !object.owner().equals(link.id)) { Boundary.remoteChanged(object); Occupancy.receive(object); } updateCollision(object);
+        } else if(message.type().equals("blocks")) {
+            ChunkBlocks blocks=message.body(ChunkBlocks.class); if(link!=null && !blocks.owner().equals(link.id)) Occupancy.receive(blocks);
         } else if(message.type().equals("welcome")) {
             Welcome welcome=message.body(Welcome.class); mc.execute(()->{peers.clear(); peers.addAll(welcome.runtimes()); var server=mc.getSingleplayerServer(); if(server!=null) server.execute(Boundary::republish);});
             RedstoneBridge.runtimeJoined();
         } else if(message.type().equals("runtime_joined")) {
             String id=message.data().get("runtime").getAsString(); mc.execute(()->peers.add(id)); RedstoneBridge.runtimeJoined();
         } else if(message.type().equals("runtime_left")) {
-            String id=message.data().get("runtime").getAsString(); readyRuntimes.remove(id); if(id.equals(session.primary())) playerVersion=0; Boundary.forgetRemote(id); Occupancy.forget(id); RemoteEntities.forget(id); RedstoneBridge.runtimeLeft(id); mc.execute(()->{peers.remove(id); GuiClient.runtimeLeft(id); RemoteCatalog.forget(id); if(id.equals(session.primary())) GuiHost.primaryLost("primary_left"); RemoteLayer removed=remoteLayers.remove(id); if(removed!=null) removed.close(); collisions.values().removeIf(v->v.owner().equals(id)); if(id.equals(session.primary())) { lastRemotePose=null; poseSequence=0; poseSourceNanos=0; yawRate=pitchRate=0; predictionLead.reset(); adaptiveOverscan.reset(); }});
+            String id=message.data().get("runtime").getAsString(); readyRuntimes.remove(id); if(id.equals(session.primary())) { playerVersion=0; primaryPaused=false; primaryUsing=false; } Boundary.forgetRemote(id); remoteLeft(mc,id); RemoteEntities.forget(id); RedstoneBridge.runtimeLeft(id); mc.execute(()->{peers.remove(id); GuiClient.runtimeLeft(id); RemoteCatalog.forget(id); if(id.equals(session.primary())) GuiHost.primaryLost("primary_left"); RemoteLayer removed=remoteLayers.remove(id); if(removed!=null) removed.close(); collisions.values().removeIf(v->v.owner().equals(id)); if(id.equals(session.primary())) { lastRemotePose=null; poseSequence=0; poseSourceNanos=0; yawRate=pitchRate=0; predictionLead.reset(); adaptiveOverscan.reset(); }});
         } else if(message.type().equals("disconnected")) {
-            worldReadySent=false; readyRuntimes.clear(); playerVersion=0; Boundary.forgetAllRemote(); Occupancy.forget(null); RemoteEntities.forget(null); SharedWorld.detach(); RedstoneBridge.disconnected();
+            worldReadySent=false; readyRuntimes.clear(); playerVersion=0; primaryPaused=false; primaryUsing=false; Boundary.forgetAllRemote(); Occupancy.forget(null); RemoteEntities.forget(null); SharedWorld.detach(); RedstoneBridge.disconnected();
             mc.execute(()->{GuiClient.disconnected(); GuiHost.primaryLost("disconnected");peers.clear(); collisions.clear(); remoteLayers.values().forEach(RemoteLayer::close); remoteLayers.clear(); displayFrame=null; displayPixels=null; lastRemotePose=null; poseSequence=0; poseSourceNanos=0; yawRate=pitchRate=0; predictionLead.reset(); adaptiveOverscan.reset();});
         } else if(message.type().equals("ray_request")) {
             RayRequest request=message.body(RayRequest.class); mc.execute(()->raycast(request));
@@ -253,10 +260,14 @@ public final class BridgeCore {
                 if(!primary && message.source().equals(session.primary()) && WorldFollow.enabled(session)) WorldFollow.receive(mc,event.topic(),event.values());
                 return;
             }
-            if(event.topic().equals("mmlf:world_ready")) { readyRuntimes.add(message.source()); MmlfLog.info("connection","runtime_world_ready",Map.of("runtime",message.source())); return; }
+            if(event.topic().equals("mmlf:world_ready")) { readyRuntimes.add(message.source()); MmlfLog.info("connection","runtime_world_ready",Map.of("runtime",message.source())); if(primary) SaveSync.checkOpened(message.source(),event.values().get("epoch")); return; }
+            if(event.topic().equals("mmlf:save_freeze") || event.topic().equals("mmlf:save_commit")) { if(!primary && message.source().equals(session.primary())) SaveSync.backgroundReceive(event.topic(),event.values()); return; }
+            if(event.topic().equals("mmlf:save_frozen") || event.topic().equals("mmlf:save_done")) { if(primary) SaveSync.primaryReceive(message.source(),event.topic(),event.values()); return; }
             if(event.topic().equals("mmlf:picked")) {RemoteItems.receive(message);return;}
             if(event.topic().equals("mmlf:catalog_request")) {if(!primary && message.source().equals(session.primary())) mc.execute(()->RemoteCatalog.answer(message.source()));return;}
             if(event.topic().equals("mmlf:catalog")) {if(primary) RemoteCatalog.receive(message.source(),event.values().get("catalog"));return;}
+            if(event.topic().equals("mmlf:play")) {if(!primary && message.source().equals(session.primary())) followPlay(mc,event.values());return;}
+            if(event.topic().equals("mmlf:use_stop")) {if(!primary && message.source().equals(session.primary())) primaryUsing=false;return;}
             if(event.topic().equals("mmlf:attack_stop")) {if(!primary && message.source().equals(session.primary())) mc.execute(()->stopMining(mc));return;}
             if(event.topic().startsWith("mmlf:selftest")) { CollabSelfTest.receive(mc,message.source(),event); return; }
             if(event.topic().equals("mmlf:icon_request")) {if(!primary && message.source().equals(session.primary())) VisualLayers.requestIcons(event.values().get("references"));return;}
@@ -280,10 +291,7 @@ public final class BridgeCore {
     public static void tick(Minecraft mc) {
         if(!gamePhaseSent) { gamePhaseSent=true; phase(dev.mmlf.launcher.runtime.InJvmBackend.PHASE_GAME); }
         // Send the host language before either side enters a world, so the guest can reload at the title screen.
-        if(primary && link!=null && link.ready() && !remoteWorldReady() && mc.options!=null && System.nanoTime()>=nextLanguageAnnouncement) {
-            nextLanguageAnnouncement=System.nanoTime()+2_000_000_000L;
-            link.sendReliable("event","*",new Event("mmlf:language",Map.of("code",mc.options.languageCode)));
-        }
+        announceLanguage();
         // The host may ask for a stop before this runtime has joined its session (still loading, stalled on a screen).
         if(++stopCheckTick%20==0 && RuntimeContext.current().inJvm() && dev.mmlf.common.InJvm.registry().get(dev.mmlf.launcher.runtime.InJvmBackend.stopKey(RuntimeContext.current().loader()))!=null) { stopBackground(mc,"host_stop"); return; }
         if(releaseRuntime!=null) joinRelease(mc);
@@ -319,10 +327,10 @@ public final class BridgeCore {
             try { poseFile=primary ? PoseFile.publisher(session.posePath(),session.token()) : PoseFile.reader(session.posePath(),session.token()); }
             catch(java.io.IOException e) { MmlfLog.sampled("camera","pose_file_unavailable",5000,Map.of("primary",primary,"reason",e.toString())); }
         }
-        if(link!=null && link.ready() && primary) sendPlayer(mc);
+        if(link!=null && link.ready() && primary) { sendPlayer(mc); sendPlay(mc); }
         if(link!=null && !primary && pendingLanguage!=null) followLanguage(mc,pendingLanguage,session.primary());
         if(link==null || !link.ready() || mc.player==null || mc.level==null) return;
-        if(!worldReadySent) { worldReadySent=true; link.sendReliable("event","*",new Event("mmlf:world_ready",Map.of())); phase(dev.mmlf.launcher.runtime.InJvmBackend.PHASE_WORLD); }
+        if(!worldReadySent) { worldReadySent=true; link.sendReliable("event","*",new Event("mmlf:world_ready",primary?Map.of():Map.of("epoch",SaveSync.ownEpoch()))); phase(dev.mmlf.launcher.runtime.InJvmBackend.PHASE_WORLD); }
         // The primary decides when the game pauses; a background that paused on lost focus would stop its server.
         if(!primary && mc.options.pauseOnLostFocus) mc.options.pauseOnLostFocus=false;
         if(primary) { GuiClient.tick(mc); VisualLayers.flushIconRequests(); RemoteCatalog.tick(mc,peers); } else GuiHost.tick(mc);
@@ -348,7 +356,7 @@ public final class BridgeCore {
                     }
                 });
             }
-        }
+        } else if(!primary && lastRemotePose!=null) followDimension(mc,lastRemotePose);
         // The boundary is published at the end of each server tick (TickSync.endOfTick), not from here.
         metrics();
     }
@@ -371,6 +379,48 @@ public final class BridgeCore {
         if(!key.equals(lastPlayer)) MmlfLog.debug("player","state_sync",Map.of("selected",selected,"remoteHeld",held!=null && RemoteItemRef.parse(held).isPresent(),"gameMode",mode));
         lastPlayer=key; playerSent=now;
         link.send("player","*",new PlayerState(++playerVersion,selected,held,grounded,mode,mc.options.languageCode));
+    }
+    /**
+     * Primary: how the game is played, which a background must match. Paused: its server stops with this one (machines,
+     * mobs and their damage wait while the player is in a menu); waiting for the background's own world is no pause for
+     * it. View and simulation distance: its blocks are loaded, run and drawn as far as this world's. Difficulty: its
+     * mobs exist and hit as hard as in this world. Sent on change and every two seconds.
+     */
+    private static void sendPlay(Minecraft mc) {
+        boolean paused=mc.isPaused() && !(mc.screen instanceof RemoteWaitScreen);
+        var server=mc.getSingleplayerServer();
+        String difficulty=server==null?"":server.getWorldData().getDifficulty().getKey();
+        String key=paused+"|"+mc.options.renderDistance().get()+"|"+mc.options.simulationDistance().get()+"|"+difficulty;
+        long now=System.nanoTime();
+        if(key.equals(lastPlay) && now-playSent<2_000_000_000L) return;
+        lastPlay=key; playSent=now;
+        link.sendReliable("event","*",new Event("mmlf:play",Map.of("paused",Boolean.toString(paused),"renderDistance",Integer.toString(mc.options.renderDistance().get()),
+            "simulationDistance",Integer.toString(mc.options.simulationDistance().get()),"difficulty",difficulty)));
+    }
+    private static String lastPlay="";
+    private static long playSent;
+    /** Background: the primary is paused (its server stops ours through {@code Minecraft.isPaused}). */
+    private static volatile boolean primaryPaused;
+    public static boolean primaryPaused() { return !primary && primaryPaused && connected(); }
+    private static void followPlay(Minecraft mc,Map<String,String> values) {
+        boolean paused=Boolean.parseBoolean(values.get("paused"));
+        if(paused!=primaryPaused) MmlfLog.info("connection","pause_follow",Map.of("paused",paused));
+        primaryPaused=paused;
+        mc.execute(()->{
+            if(!Experiments.SMALL_VIEW) try {
+                int render=Integer.parseInt(values.get("renderDistance")),simulation=Integer.parseInt(values.get("simulationDistance"));
+                if(mc.options.renderDistance().get()!=render) { mc.options.renderDistance().set(render); MmlfLog.info("connection","view_follow",Map.of("renderDistance",render)); }
+                if(mc.options.simulationDistance().get()!=simulation) mc.options.simulationDistance().set(simulation);
+            } catch(RuntimeException ignored) { }
+            // Scenes set their own difficulty; a background following the primary's saves plays at the primary's.
+            var server=mc.getSingleplayerServer();
+            var difficulty=net.minecraft.world.Difficulty.byName(String.valueOf(values.get("difficulty")));
+            if(server!=null && difficulty!=null && WorldFollow.enabled(session) && WorldFollow.following()) server.execute(()->{
+                if(server.getWorldData().getDifficulty()==difficulty) return;
+                server.setDifficulty(difficulty,true);
+                MmlfLog.info("connection","difficulty_follow",Map.of("difficulty",difficulty.getKey()));
+            });
+        });
     }
     private static String lastPlayer="";
     private static long playerSent;
@@ -433,6 +483,16 @@ public final class BridgeCore {
     private static boolean initialLanguageReceived, initialLanguageWaitReported;
     private static long initialLanguageWaitStarted, nextLanguageAnnouncement;
     /** Do not enter the far world in the middle of the first language reload; old peers get a bounded fallback. */
+    /**
+     * Primary, any thread: the host language every two seconds until a background has a world. Also from a generation
+     * worker waiting for the background (CoGeneration), while the client thread waits for the server without ticking.
+     */
+    static synchronized void announceLanguage() {
+        Minecraft mc=Minecraft.getInstance();
+        if(!primary || link==null || !link.ready() || remoteWorldReady() || mc.options==null || System.nanoTime()<nextLanguageAnnouncement) return;
+        nextLanguageAnnouncement=System.nanoTime()+2_000_000_000L;
+        link.sendReliable("event","*",new Event("mmlf:language",Map.of("code",mc.options.languageCode)));
+    }
     static boolean initialLanguageReady() {
         if(primary || link==null) return true;
         if(languageBusy()) return false;
@@ -510,6 +570,26 @@ public final class BridgeCore {
     private static long cameraRenderStart;
     private static double yawRate,pitchRate;
     private static long poseArrived;
+    private static long dimensionFollowAt;
+    /**
+     * Background: the primary is in another dimension. Its copy of the player goes there too (no portal is made or
+     * used), so the chunks around the primary load here, its own blocks there run and are drawn, and interactions there
+     * reach it. Retried every two seconds while the change is under way.
+     */
+    private static void followDimension(Minecraft mc,Pose p) {
+        var server=mc.getSingleplayerServer(); long now=System.nanoTime();
+        if(server==null || p.dimension()==null || now-dimensionFollowAt<2_000_000_000L) return;
+        dimensionFollowAt=now;
+        server.execute(()->{
+            if(server.getPlayerList().getPlayers().isEmpty()) return;
+            var player=server.getPlayerList().getPlayers().getFirst();
+            if(player.level().dimension().location().toString().equals(p.dimension())) return;
+            var target=RedstoneBridge.level(server,p.dimension());
+            if(target==null) { MmlfLog.sampled("connection","dimension_unknown",10000,Map.of("dimension",p.dimension())); return; }
+            MmlfLog.info("connection","dimension_follow",Map.of("from",player.level().dimension().location().toString(),"to",p.dimension()));
+            player.teleportTo(target,p.playerX(),p.playerY(),p.playerZ(),p.yaw(),p.pitch());
+        });
+    }
     /** Render thread: keeps a smoothed turn rate so a background can aim where the primary will be looking. */
     private static void receivePose(Pose pose, long sourceNanos) {
         long now=System.nanoTime(); Pose previous=lastRemotePose;
@@ -588,7 +668,20 @@ public final class BridgeCore {
     /** A background left its world to follow the primary; it announces readiness again in the next one. */
     static void worldLeft() { worldReadySent=false; }
     /** Primary: it closed its world, so the backgrounds close theirs and report readiness again in the next one. */
-    static void remoteWorldsClosed() { readyRuntimes.clear(); }
+    static void remoteWorldsClosed() { readyRuntimes.clear(); Occupancy.forget(null); }
+    /** Primary: the backgrounds whose world follows this one's open save. */
+    static java.util.Set<String> readyRemotes() { return java.util.Set.copyOf(readyRuntimes); }
+    /**
+     * A runtime left. On the primary in a world its blocks stay where they are, still solid and lit, but no longer run:
+     * releasing them would open holes the player could fall or build into, and water would flow in, which the owner's
+     * world would not know of when it is back. They are released when this world closes.
+     */
+    private static void remoteLeft(Minecraft mc,String id) {
+        if(!primary || mc.getSingleplayerServer()==null || session==null || id.equals(session.primary())) { Occupancy.forget(id); return; }
+        MmlfLog.warn("connection","remote_left_frozen",Map.of("runtime",id));
+        mc.execute(()->{ if(mc.gui!=null) mc.gui.getChat().addMessage(net.minecraft.network.chat.Component.literal(
+            "MMLF：远端 "+id+" 已退出。它的方块保留占位但不再运行；请保存并重新进入世界以恢复。")); });
+    }
     public static boolean remoteWorldReady() { return !readyRuntimes.isEmpty(); }
     public static int peerCount() { return peers.size(); }
     /**
@@ -653,13 +746,15 @@ public final class BridgeCore {
         }
         if(hit.getType()==net.minecraft.world.phys.HitResult.Type.MISS) { sendMiss(request); return; }
         ObjectState o=Boundary.local(p.dimension(),hit.getBlockPos());
-        if(o==null && !primary) {
+        // This runtime's plain blocks (ores, plants) are published per chunk, not as objects.
+        boolean plain=o==null && !primary && Boundary.localPlain(p.dimension(),hit.getBlockPos());
+        if(o==null && !primary && !plain) {
             var hitType=net.minecraft.core.registries.BuiltInRegistries.BLOCK.getKey(mc.level.getBlockState(hit.getBlockPos()).getBlock());
             if(hitType.getNamespace().equals("minecraft") && !ownedVanilla.contains(hit.getBlockPos())) {sendMiss(request);return;}
             // Rendered but not yet indexed objects block the ray; never act through them.
         }
         Vec3 point=hit.getLocation(); var pos=hit.getBlockPos();
-        RayHit result=new RayHit(request.actionId(),o==null?null:o.id(),o==null?0:o.revision(),start.distanceTo(point),pos.getX(),pos.getY(),pos.getZ(),hit.getDirection().name(),point.x,point.y,point.z,false);
+        RayHit result=new RayHit(request.actionId(),o!=null?o.id():plain?dev.mmlf.common.Messages.bulkId(link.id):null,o==null?0:o.revision(),start.distanceTo(point),pos.getX(),pos.getY(),pos.getZ(),hit.getDirection().name(),point.x,point.y,point.z,false);
         link.send("ray_hit","coordinator",result);
     }
     private static void sendMiss(RayRequest request) {
@@ -671,11 +766,15 @@ public final class BridgeCore {
     private static final java.util.List<PlacementCheck> placementChecks=new java.util.ArrayList<>();
     private static void interact(Interaction action) {
         Minecraft mc=Minecraft.getInstance(); RayHit hit=action.hit();
+        // Held still for a save of the primary: the interaction happens right after it, as it does on the primary.
+        if(!primary && SaveSync.deferWhileFrozen(()->interact(action))) return;
         if(!handledActions.firstTime(action.actionId())) { MmlfLog.warn("interaction","duplicate_ignored",Map.of("actionId",action.actionId())); return; }
         if(hit.entityHit()) { interactEntity(mc,action); return; }
+        if(hit.miss()) { useAir(mc,action); return; }
         var pos=new net.minecraft.core.BlockPos(hit.x(),hit.y(),hit.z()); ObjectState current=Boundary.local(action.pose().dimension(),pos);
         if(mc.getSingleplayerServer()==null || mc.player==null || mc.level==null) { result(action,false,"FAIL","runtime_not_ready"); return; }
-        if(hit.objectId()!=null && (current==null || !current.id().equals(hit.objectId()) || current.revision()!=hit.revision())) { result(action,false,"FAIL","stale_target"); return; }
+        if(dev.mmlf.common.Messages.isBulkId(hit.objectId())) { if(current!=null || !Boundary.localPlain(action.pose().dimension(),pos)) { result(action,false,"FAIL","stale_target"); return; } }
+        else if(hit.objectId()!=null && (current==null || !current.id().equals(hit.objectId()) || current.revision()!=hit.revision())) { result(action,false,"FAIL","stale_target"); return; }
         if(!mc.level.dimension().location().toString().equals(action.pose().dimension())) { result(action,false,"FAIL","dimension_mismatch"); return; }
         var itemRef=RemoteItemRef.parse(action.heldItem());
         boolean remotePlacement=itemRef.isPresent() && itemRef.get().owner().equals(link.id) && "use".equals(action.action());
@@ -731,6 +830,47 @@ public final class BridgeCore {
             }
             default -> result(action,false,"FAIL","unsupported_action");
         }
+    }
+    /**
+     * Nothing was in reach: the held item is used into the air as vanilla's {@code startUseItem} does after its ray
+     * misses. An item that is then held in use (food, a bow, a shield) keeps being used while the primary holds the key
+     * ({@link #primaryUsing}); vanilla releases it when the key is let go.
+     */
+    private static void useAir(Minecraft mc,Interaction action) {
+        var player=mc.player;
+        if(player==null || mc.level==null || mc.gameMode==null) { result(action,false,"FAIL","runtime_not_ready"); return; }
+        if(!mc.level.dimension().location().toString().equals(action.pose().dimension())) { result(action,false,"FAIL","dimension_mismatch"); return; }
+        var hand=Messages.OFF_HAND.equals(action.handOrMain()) ? net.minecraft.world.InteractionHand.OFF_HAND : net.minecraft.world.InteractionHand.MAIN_HAND;
+        if(action.selectedSlot()>=0 && action.selectedSlot()<9) player.getInventory().selected=action.selectedSlot();
+        String problem=InventoryBridge.heldProblem(player.getItemInHand(hand),action.heldItem());
+        if(problem!=null) { result(action,false,"FAIL",problem); return; }
+        // A repeated request while the key is held keeps an owner's use going.
+        if(!primary) { primaryUsing=true; primaryUsingUntil=System.nanoTime()+USE_HOLD_NANOS; }
+        if(player.getItemInHand(hand).isEmpty() || player.isUsingItem()) { result(action,false,"PASS",null); return; }
+        // The air use acts along this runtime's own look, which must be the primary's at the moment of the click.
+        player.setYRot(action.pose().yaw()); player.setXRot(action.pose().pitch());
+        var outcome=mc.gameMode.useItem(player,hand);
+        if(outcome.consumesAction()) mc.gameRenderer.itemInHandRenderer.itemUsed(hand);
+        if(outcome.shouldSwing()) player.swing(hand);
+        MmlfLog.info("interaction","native_result",Map.of("actionId",action.actionId(),"action","use","path","air","result",outcome.name()));
+        result(action,outcome.consumesAction(),outcome.name(),null);
+    }
+    /**
+     * Owner: the primary still holds the use key for an item this runtime uses in the air. Kept alive by the primary's
+     * repeated use requests and ended at once by {@code mmlf:use_stop}; vanilla's release check reads it as the key.
+     */
+    private static volatile boolean primaryUsing;
+    private static volatile long primaryUsingUntil;
+    private static final long USE_HOLD_NANOS=600_000_000L;
+    public static boolean primaryUsing() {
+        if(primary || !primaryUsing) return false;
+        if(System.nanoTime()-primaryUsingUntil>0) { primaryUsing=false; return false; }
+        return true;
+    }
+    /** Primary: the use key was let go. */
+    public static void useReleased() {
+        if(!primary || link==null || !link.ready()) return;
+        link.sendReliable("event","*",new Event("mmlf:use_stop",Map.of()));
     }
     /**
      * Uses a block the way this runtime's own player would: the client game mode runs the client-side logic (where some
@@ -837,7 +977,11 @@ public final class BridgeCore {
             server.execute(()->{
                 if(server.getPlayerList().getPlayers().isEmpty()) return;
                 var level=server.getPlayerList().getPlayers().getFirst().serverLevel(); var after=level.getBlockState(check.pos());
-                if(!after.equals(check.before())) { ownVanilla(level,check.pos()); MmlfLog.info("items","native_placement",Map.of("actionId",check.actionId(),"position",check.pos().toShortString(),"state",after.toString())); return; }
+                if(!after.equals(check.before())) {
+                    // With the shared map a vanilla placement was forwarded and is the primary's block: claiming it too
+                    // would give the same block to both worlds.
+                    boolean vanilla=net.minecraft.core.registries.BuiltInRegistries.BLOCK.getKey(after.getBlock()).getNamespace().equals("minecraft");
+                    if(!(vanilla && SharedWorld.forwarding())) ownVanilla(level,check.pos()); MmlfLog.info("items","native_placement",Map.of("actionId",check.actionId(),"position",check.pos().toShortString(),"state",after.toString())); return; }
                 // Unchanged on the server although the client may have predicted a placement: record what the server saw.
                 var player=server.getPlayerList().getPlayers().getFirst();
                 var chunk=level.getChunkAt(check.pos());

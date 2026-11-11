@@ -2,6 +2,8 @@ package dev.mmlf.coordinator;
 
 import dev.mmlf.common.*;
 import dev.mmlf.common.Messages.*;
+import static dev.mmlf.common.Messages.bulkId;
+import static dev.mmlf.common.Messages.isBulkId;
 import java.util.*;
 import java.util.concurrent.*;
 
@@ -69,6 +71,7 @@ public final class CoordinatorCore {
                 id=m.source(); MmlfLog.info("coordinator","runtime_registered",Map.of("runtimeId",id,"loader",h.loader(),"primary",h.primary(),"incarnation",h.incarnation()));identities.put(c,id); peers.put(id,c); incarnations.put(id,h.incarnation()); if(h.primary()) { primary=id; primarySeen=true; }
                 c.send(Wire.of("welcome","coordinator",id,new Welcome(peers.size()-1,primary,Set.copyOf(peers.keySet()),Map.copyOf(incarnations))).encode());
                 for(ObjectState state:world.snapshot()) c.send(Wire.of("object","coordinator",id,state).encode());
+                for(ChunkBlocks blocks:world.blocksSnapshot()) c.send(Wire.of("blocks","coordinator",id,blocks).encode());
                 broadcast(Wire.of("runtime_joined","coordinator",null,Map.of("runtime",id,"incarnation",h.incarnation())).encode());
                 return;
             }
@@ -79,6 +82,7 @@ public final class CoordinatorCore {
             switch(m.type()) {
                 case "ping" -> c.send(Wire.of("pong","coordinator",id,new Ping(m.body(Ping.class).sent(),System.nanoTime())).encode());
                 case "object" -> { ObjectState s=m.body(ObjectState.class); world.update(id,s); MmlfLog.debug("world","object_update",Map.of("owner",id,"objectId",s.id(),"revision",s.revision(),"type",s.type()));relay(c,m); }
+                case "blocks" -> { world.updateBlocks(id,m.body(ChunkBlocks.class)); relay(c,m); }
                 case "ray_query" -> beginRay(id,m);
                 case "ray_hit" -> collectHit(id,m);
                 case "event" -> relay(c,m);
@@ -145,11 +149,27 @@ public final class CoordinatorCore {
         }
         if(!hit.miss() && (!Double.isFinite(hit.distance()) || hit.distance()<0 || hit.distance()>p.request.reach()))
             throw new IllegalArgumentException("invalid hit distance");
-        if(!hit.miss() && hit.objectId()!=null && !world.valid(source,hit)) throw new IllegalArgumentException("unowned or stale target");
+        if(!hit.miss() && hit.objectId()!=null) {
+            boolean owned=isBulkId(hit.objectId())
+                ? hit.objectId().equals(bulkId(source)) && world.ownsBlock(source,p.request.pose().dimension(),hit.x(),hit.y(),hit.z())
+                : world.valid(source,hit);
+            if(!owned) throw new IllegalArgumentException("unowned or stale target");
+        }
         p.hits.put(source,hit);
         if(p.hits.size()!=p.expected.size()) return;
         pending.remove(hit.actionId());
         Map.Entry<String,RayHit> best=p.hits.entrySet().stream().filter(e->!e.getValue().miss()).min(Comparator.comparingDouble(e->e.getValue().distance())).orElse(null);
+        if(best==null && ("use".equals(p.request.action()) || p.request.action()==null)) {
+            // Nothing in reach: the held item is used into the air (food, potions, projectiles, buckets on deep water) by
+            // the runtime that owns it, as vanilla does when its own ray misses.
+            var remoteItem=RemoteItemRef.parse(p.request.heldItem());
+            String destination=remoteItem.map(RemoteItemRef::owner).orElse(primary);
+            Peer target=peers.get(destination); RayHit miss=p.hits.get(destination);
+            if(target==null || miss==null) throw new IllegalArgumentException("item runtime offline");
+            MmlfLog.info("interaction","routed",Map.of("actionId",hit.actionId(),"owner",destination,"hitOwner","none","action","use_air","distance",0));
+            target.send(Wire.of("interaction","coordinator",destination,new Interaction(hit.actionId(),p.request.pose(),miss,p.request.action(),p.request.heldItem(),p.request.secondaryUse(),p.request.hand(),p.request.selectedSlot())).encode());
+            return;
+        }
         if(best==null) {MmlfLog.debug("interaction","no_target",Map.of("actionId",hit.actionId(),"action",String.valueOf(p.request.action()),"cameraId",p.request.pose().cameraId()));return;}
         if(best.getValue().objectId()==null && !best.getValue().entityHit() && !best.getKey().equals(primary)) {MmlfLog.debug("interaction","unindexed_target",Map.of("actionId",hit.actionId(),"hitOwner",best.getKey(),"position",best.getValue().x()+","+best.getValue().y()+","+best.getValue().z()));return;}
         String destination=best.getKey(); RayHit routedHit=best.getValue();

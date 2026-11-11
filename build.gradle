@@ -11,11 +11,15 @@ subprojects {
     dependencies { testImplementation 'org.junit.jupiter:junit-jupiter:5.11.4'; testRuntimeOnly 'org.junit.platform:junit-platform-launcher' }
 }
 
-// Release mods for players: one jar per loader.
+// Release mods for players: one jar per loader, and each loader's test mod, whose blocks the title screen's
+// "MMLF 测试平台" places (optional: without them the platform shows only the other mods' blocks).
 tasks.register('release', Copy) {
     def fabric = project(':fabric-bridge'), neoforge = project(':neoforge-bridge')
-    dependsOn fabric.tasks.named('remapJar'), neoforge.tasks.named('jar')
+    def fabricTest = project(':fabric-test-mod'), neoforgeTest = project(':neoforge-test-mod')
+    dependsOn fabric.tasks.named('remapJar'), neoforge.tasks.named('jar'), fabricTest.tasks.named('remapJar'), neoforgeTest.tasks.named('jar')
     from(fabric.tasks.named('remapJar')) { rename { "mmlf-fabric-${version}.jar" } }
     from(neoforge.tasks.named('jar')) { rename { "mmlf-neoforge-${version}.jar" } }
+    from(fabricTest.tasks.named('remapJar')) { rename { "mmlf-fabric-testmod-${version}.jar" } }
+    from(neoforgeTest.tasks.named('jar')) { rename { "mmlf-neoforge-testmod-${version}.jar" } }
     into layout.buildDirectory.dir('release')
 }

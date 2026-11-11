@@ -27,7 +27,7 @@ public final class DemoScene {
   * {@code equipment} maps slot names ({@code head}, {@code mainhand}, ...) to item ids; {@code profession} gives a
   * villager a fixed trade set; {@code invulnerable} keeps it alive among the scene's hostile mobs.
   */
- public record SceneEntity(String runtime,String type,double x,double y,double z,float yaw,Map<String,String> equipment,String profession,boolean invulnerable) {}
+ public record SceneEntity(String runtime,String type,double x,double y,double z,float yaw,Map<String,String> equipment,String profession,boolean invulnerable,String name) {}
  public record Scene(List<Placement> placements,List<SceneEntity> entities) {}
  /** The scene as loaded, for the collaboration self-test. */
  static Scene scene;
@@ -89,7 +89,12 @@ public final class DemoScene {
   }
   // A world saved with the entity keeps what an earlier scene set; the current scene decides.
   entity.setInvulnerable(item.invulnerable());
-  RemoteEntities.claim(entity.getUUID());
+  // {@code name} shows above the entity; {owner} becomes the loader that owns it, e.g. "NeoForge 僵尸".
+  if(item.name()!=null && !item.name().isBlank()) {
+   entity.setCustomName(net.minecraft.network.chat.Component.literal(item.name().replace("{owner}",SessionStatus.displayName(BridgeCore.runtimeId()))));
+   entity.setCustomNameVisible(true);
+  }
+  RemoteEntities.claim(entity);
   MmlfLog.info("scene","scene_entity",Map.of("type",item.type(),"uuid",entity.getUUID().toString(),"spawned",found.isEmpty()));
  }
  static String block(Placement item,Session session) { return item.block().replace("{primary}",session.primary()).replace("{background}",background(session)); }
@@ -144,7 +149,9 @@ public final class DemoScene {
     }
    });
   }
-  mc.options.pauseOnLostFocus=false;
+  // A release primary is the player's own game: its options (saved to options.txt) stay as the player set them.
+  boolean playerOptions=SessionBootstrap.release() && BridgeCore.isPrimary();
+  if(!playerOptions) mc.options.pauseOnLostFocus=false;
   // thin_world: a void world has nothing to stand on, and the player falls out of it before the primary's pose arrives.
   if(Experiments.THIN_WORLD && !BridgeCore.isPrimary() && mc.getSingleplayerServer()!=null) {
    var server=mc.getSingleplayerServer();
@@ -161,15 +168,20 @@ public final class DemoScene {
   if(!started && !BridgeCore.isPrimary() && mc.screen instanceof net.minecraft.client.gui.screens.TitleScreen && !BridgeCore.initialLanguageReady()) return;
   if(!started && mc.level==null && mc.screen instanceof net.minecraft.client.gui.screens.TitleScreen) {
    started=true;
-   var settings=new LevelSettings("MMLF Demo",GameType.CREATIVE,false,Difficulty.PEACEFUL,true,new GameRules(),WorldDataConfiguration.DEFAULT);
-   mc.options.pauseOnLostFocus=false;
-   mc.options.framerateLimit().set(60);
-   mc.options.bobView().set(false);
-   mc.options.fov().set(70);
+   boolean release=SessionBootstrap.release();
+   var settings=new LevelSettings(release?TestPlatform.LEVEL_NAME:"MMLF Demo",GameType.CREATIVE,false,Difficulty.PEACEFUL,true,new GameRules(),WorldDataConfiguration.DEFAULT);
+   if(!playerOptions) {
+    mc.options.pauseOnLostFocus=false;
+    mc.options.framerateLimit().set(60);
+    mc.options.bobView().set(false);
+    mc.options.fov().set(70);
+   }
+   // Release: one fixed save in the player's (or the background's) saves, rebuilt fresh each time.
+   String folder=release?TestPlatform.freshSave(mc):"mmlf-"+System.currentTimeMillis();
    boolean thin=Experiments.THIN_WORLD && !BridgeCore.isPrimary();
    if(thin) MmlfLog.info("experiment","thin_world_create",Map.of("runtime",runtime));
    if(Experiments.SMALL_VIEW && !BridgeCore.isPrimary()) mc.options.renderDistance().set(2);
-   mc.createWorldOpenFlows().createFreshLevel("mmlf-"+System.currentTimeMillis(),settings,new WorldOptions(0L,false,false),
+   mc.createWorldOpenFlows().createFreshLevel(folder,settings,new WorldOptions(0L,false,false),
     registries->thin ? VoidWorld.dimensions(registries) : registries.registryOrThrow(Registries.WORLD_PRESET).getOrThrow(WorldPresets.FLAT).createWorldDimensions(),mc.screen);
   }
   // Background runtimes may join a minute after the primary; the scripted test starts once a remote frame has arrived.

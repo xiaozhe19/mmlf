@@ -50,6 +50,7 @@ final class ReleaseSession {
     private static Path hostInJvm(String primary,String minecraftVersion,Path root,Path gameDirectory,dev.mmlf.launcher.VersionProfile.Account account,Map<String,String> launcher) throws Exception {
         long started=System.currentTimeMillis();
         var prepared=dev.mmlf.launcher.ReleaseRemote.prepare(root,primary,minecraftVersion,gameDirectory,(f,t)->SessionStatus.managerStep(f.floatValue(),t));
+        applyRemoteOverrides(prepared.mods(),prepared.game());
         Path sessions=gameDirectory.resolve("mmlf").resolve("sessions");
         dev.mmlf.launcher.ReleaseSupport.removeOldSessions(sessions);
         var host=dev.mmlf.launcher.SessionHost.create(sessions,null,primary,false);
@@ -67,7 +68,56 @@ final class ReleaseSession {
     }
 
     /**
-     * The launcher's {@code .minecraft}: the folder above the libraries on this game's classpath, else the nearest
+     * With the unified render layer, the remote only submits what it draws; mods that would draw past the generic
+     * capture paths get the configuration the bundled {@code remote-overrides.json} names (e.g. Create's Flywheel off),
+     * written into the remote's staged game directory after the instance's own config was copied there. The player's
+     * instance itself is not touched. The development scripts apply the same file.
+     */
+    private static void applyRemoteOverrides(List<Path> mods,Path game) {
+        if(!Experiments.GEOMETRY_REPLAY) return;
+        try(InputStream in=ReleaseSession.class.getResourceAsStream("remote-overrides.json")) {
+            if(in==null) return;
+            var root=com.google.gson.JsonParser.parseString(new String(in.readAllBytes(),StandardCharsets.UTF_8)).getAsJsonObject();
+            Set<String> ids=new HashSet<>();
+            for(Path mod:mods) ids.addAll(modIds(mod));
+            for(var element:root.getAsJsonArray("overrides")) {
+                var entry=element.getAsJsonObject();
+                boolean matches=false;
+                for(var id:entry.getAsJsonArray("mods")) matches|=ids.contains(id.getAsString());
+                if(!matches) continue;
+                for(var file:entry.getAsJsonObject("files").entrySet()) {
+                    Path target=game.resolve(file.getKey()).normalize();
+                    if(!target.startsWith(game)) continue;
+                    Files.createDirectories(target.getParent());
+                    Files.writeString(target,file.getValue().getAsString());
+                    MmlfLog.info("launcher","remote_override",Map.of("file",file.getKey()));
+                }
+            }
+        } catch(IOException | RuntimeException e) {
+            MmlfLog.warn("launcher","remote_override_failed",Map.of("exception",e.toString()));
+        }
+    }
+    private static final java.util.regex.Pattern NEOFORGE_MOD_ID=java.util.regex.Pattern.compile("modId\\s*=\\s*\"([^\"]+)\"");
+    /** Mod ids a jar declares, for either loader; empty when it cannot be read. */
+    private static Set<String> modIds(Path jar) {
+        Set<String> ids=new HashSet<>();
+        try(var zip=new java.util.zip.ZipFile(jar.toFile())) {
+            var toml=zip.getEntry("META-INF/neoforge.mods.toml");
+            if(toml!=null) try(var in=zip.getInputStream(toml)) {
+                var m=NEOFORGE_MOD_ID.matcher(new String(in.readAllBytes(),StandardCharsets.UTF_8));
+                while(m.find()) ids.add(m.group(1));
+            }
+            var fabric=zip.getEntry("fabric.mod.json");
+            if(fabric!=null) try(var in=zip.getInputStream(fabric)) {
+                var json=com.google.gson.JsonParser.parseString(new String(in.readAllBytes(),StandardCharsets.UTF_8)).getAsJsonObject();
+                if(json.has("id")) ids.add(json.get("id").getAsString());
+            }
+        } catch(IOException | RuntimeException e) { /* not a readable mod jar */ }
+        return ids;
+    }
+
+    /**
+     * The launcher's {@code .minecraft}:the folder above the libraries on this game's classpath, else the nearest
      * folder above the game directory holding both versions and libraries (a version-isolated game sits inside it).
      */
     static Path minecraftRoot(Path gameDirectory) {

@@ -61,6 +61,14 @@ public final class GeometryLayer {
  private static String previousRenderHost;
  private static volatile boolean assetsInvalidated;
  private static long exportedVersion,lastExport,exports,exportBytesTotal;
+ /**
+  * Submitter, one JVM: the sections as last exported (an unchanged section is the same object in the next snapshot) and
+  * their scene generation. Only what changed since is exported, in order ({@link RenderChannel#append}); the whole
+  * scene only for a new scene or when the render host asks for it.
+  */
+ private static Map<RenderSectionStore.Key,RenderSectionStore.Section> exportedSections=Map.of();
+ private static long exportedGeneration=-1;
+ private static final int GEOMETRY_QUEUE_LIMIT=64;
  private static boolean atlasWritten,unsupportedLogged;
 
  // ---- render host state (render thread) ----
@@ -166,7 +174,7 @@ public final class GeometryLayer {
     previousRenderHost=selectedHost;
     RenderInstanceChannel.reset(submissions.resetScene());
     atlasWritten=false;
-    exportedVersion=0;
+    exportedVersion=0; exportedGeneration=-1; exportedSections=Map.of();
     resetHost(mc);
     assetsInvalidated=false;
    }
@@ -204,25 +212,43 @@ public final class GeometryLayer {
  private static void exportSubmissions(Minecraft mc) {
   long now=System.currentTimeMillis();
   if(now-lastExport<(sameJvm()?0:250)) return;
-  var snapshot=submissions.snapshotIfChanged(exportedVersion);
+  boolean ordered=RenderChannel.ordered();
+  boolean restart=ordered && RenderChannel.restartRequested("geometry");
+  var snapshot=restart ? submissions.snapshot() : submissions.snapshotIfChanged(exportedVersion);
   if(snapshot==null) return;
   long version=snapshot.revision();
   lastExport=now;
   long started=System.nanoTime();
   try {
+   boolean full=!ordered || restart || snapshot.generation()!=exportedGeneration;
+   var payload=snapshot; List<RenderSectionStore.Key> removed=List.of();
+   if(!full) {
+    Map<RenderSectionStore.Key,RenderSectionStore.Section> changed=new HashMap<>();
+    for(var entry:snapshot.sections().entrySet()) if(exportedSections.get(entry.getKey())!=entry.getValue()) changed.put(entry.getKey(),entry.getValue());
+    removed=new ArrayList<>();
+    for(var key:exportedSections.keySet()) if(!snapshot.sections().containsKey(key)) removed.add(key);
+    if(changed.isEmpty() && removed.isEmpty()) { exportedVersion=version; exportedSections=snapshot.sections(); return; }
+    payload=new RenderSectionStore.Snapshot(snapshot.generation(),snapshot.revision(),changed);
+   }
    int sections=0,vertices=0; long newest=0;
-   for(var section:snapshot.sections().values()) {
+   for(var section:payload.sections().values()) {
     if(section.layers().isEmpty()) continue;
     sections++;
     newest=Math.max(newest,section.capturedMs());
     for(var layer:section.layers()) vertices+=layer.vertexCount();
    }
-   byte[] bytes=RenderGeometryCodec.encode(new RenderGeometryCodec.Batch(BridgeCore.runtimeId(),mc.level.dimension().location().toString(),now,snapshot));
-   RenderChannel.publish("geometry",bytes);
-   exportedVersion=version;
+   byte[] bytes=RenderGeometryCodec.encode(new RenderGeometryCodec.Batch(BridgeCore.runtimeId(),mc.level.dimension().location().toString(),now,payload,full,removed));
+   if(!ordered) RenderChannel.publish("geometry",bytes);
+   else if(!RenderChannel.append("geometry",bytes,GEOMETRY_QUEUE_LIMIT)) {
+    // The render host is not reading: what it missed is dropped, and it gets the whole scene next.
+    exportedGeneration=-1; exportedVersion=-1; exportedSections=Map.of();
+    MmlfLog.sampled("experiment","geometry_queue_overflow",5000,Map.of("limit",GEOMETRY_QUEUE_LIMIT));
+    return;
+   }
+   exportedVersion=version; exportedSections=snapshot.sections(); exportedGeneration=snapshot.generation();
    exports++; exportBytesTotal+=bytes.length;
-   MmlfLog.info("experiment","geometry_export",Map.of("sections",sections,"vertices",vertices,"bytes",bytes.length,"exportMicros",(System.nanoTime()-started)/1000,
-    "newestCaptureAgeMs",newest==0?-1:now-newest,"exports",exports,"bytesTotal",exportBytesTotal));
+   MmlfLog.sampled("experiment","geometry_export",1000,Map.of("full",full,"sections",sections,"removed",removed.size(),"totalSections",snapshot.sections().size(),"vertices",vertices,"bytes",bytes.length,
+    "exportMicros",(System.nanoTime()-started)/1000,"newestCaptureAgeMs",newest==0?-1:now-newest,"exports",exports,"bytesTotal",exportBytesTotal));
   } catch(IOException e) { MmlfLog.sampled("experiment","geometry_export_failed",2000,Map.of("exception",e.toString())); }
  }
 
@@ -242,6 +268,8 @@ public final class GeometryLayer {
   AtlasAnimation.reset();
   remoteTypes.clear();
   geometryCursor.reset(); atlasCursor.reset(); dynamicCursor.reset();
+  pendingGeometry.clear(); remoteSections.clear(); awaitingWholeScene=true;
+  if(isRenderHost() && BridgeCore.session()!=null && RenderChannel.ordered()) RenderChannel.requestRestart(background(),"geometry");
   dev.mmlf.bridge.ProxyItems.reset();
   RemoteProxy.removeCurrent();
  }
@@ -281,8 +309,18 @@ public final class GeometryLayer {
     loadAtlas(atlasBytes);
     geometryCursor.reset(); // geometry may have been waiting for this texture generation
    }
-   byte[] geometry=RenderChannel.poll(runtime,"geometry",geometryCursor,RenderGeometryCodec.MAX_FILE);
-   if(geometry!=null) load(geometry);
+   if(RenderChannel.ordered()) {
+    for(byte[] bytes:RenderChannel.drain(runtime,"geometry")) {
+     var batch=RenderGeometryCodec.decode(bytes);
+     if(batch.full()) { pendingGeometry.clear(); awaitingWholeScene=false; }
+     else if(awaitingWholeScene) continue;
+     pendingGeometry.add(batch);
+    }
+    applyPendingGeometry();
+   } else {
+    byte[] geometry=RenderChannel.poll(runtime,"geometry",geometryCursor,RenderGeometryCodec.MAX_FILE);
+    if(geometry!=null) load(geometry);
+   }
   } catch(IOException | RuntimeException e) { MmlfLog.sampled("experiment","geometry_poll_failed",2000,Map.of("exception",e.toString())); }
  }
  private static void loadAtlas(byte[] bytes) throws IOException {
@@ -302,20 +340,50 @@ public final class GeometryLayer {
   TerrainAtlas.copy(atlas,atlasWidth,atlasHeight);
   MmlfLog.info("experiment","geometry_atlas_loaded",Map.of("width",texture.width(),"height",texture.height()));
  }
- private static void load(byte[] data) throws IOException {
+ /** Render host, one JVM: batches in order, each once; waits while the atlas of their scene has not arrived. */
+ private static final ArrayDeque<RenderGeometryCodec.Batch> pendingGeometry=new ArrayDeque<>();
+ private static boolean awaitingWholeScene=true;
+ /** Render host: the received sections, merged from the whole scene and the changes since. */
+ private static final Map<RenderSectionStore.Key,RenderSectionStore.Section> remoteSections=new HashMap<>();
+ private static void applyPendingGeometry() {
+  RenderGeometryCodec.Batch batch;
+  while((batch=pendingGeometry.peek())!=null) {
+   long generation=batch.snapshot().generation();
+   if(!batch.full() && generation!=acceptedGeneration) {
+    // A change to a scene this runtime does not hold: start over from the whole scene.
+    pendingGeometry.clear(); awaitingWholeScene=true; RenderChannel.requestRestart(background(),"geometry");
+    MmlfLog.sampled("experiment","geometry_restart",5000,Map.of("generation",generation,"accepted",acceptedGeneration));
+    return;
+   }
+   boolean needsAtlas=batch.snapshot().sections().values().stream().flatMap(s->s.layers().stream()).anyMatch(RECEIVER_CAPABILITIES::accepts);
+   if(needsAtlas && (atlas==null || generation!=atlasGeneration)) return;
+   pendingGeometry.poll();
+   try { apply(batch,0); }
+   catch(IOException | RuntimeException e) {
+    MmlfLog.sampled("experiment","geometry_apply_failed",2000,Map.of("exception",e.toString()));
+    pendingGeometry.clear(); awaitingWholeScene=true; RenderChannel.requestRestart(background(),"geometry");
+    return;
+   }
+  }
+ }
+ private static void load(byte[] data) throws IOException { apply(RenderGeometryCodec.decode(data),data.length); }
+ private static void apply(RenderGeometryCodec.Batch batch,int size) throws IOException {
   long started=System.nanoTime();
-  var batch=RenderGeometryCodec.decode(data);
   var mc=Minecraft.getInstance();
   if(!batch.runtime().equals(background()) || mc.level==null || !batch.dimension().equals(mc.level.dimension().location().toString()))
    throw new IOException("geometry scene mismatch");
   long generation=batch.snapshot().generation(),revision=batch.snapshot().revision();
   if(generation<acceptedGeneration || generation==acceptedGeneration && revision<=acceptedRevision) return;
+  if(!batch.full() && generation!=acceptedGeneration) throw new IOException("geometry change without its scene");
   boolean needsAtlas=batch.snapshot().sections().values().stream().flatMap(s->s.layers().stream()).anyMatch(RECEIVER_CAPABILITIES::accepts);
   if(needsAtlas && (atlas==null || generation!=atlasGeneration)) throw new IOException("geometry texture generation mismatch");
   long exportedMs=batch.exportedMs(); int sections=batch.snapshot().sections().size();
   int vertices=0,reused=0,rebuilt=0; long newest=0;
-  Map<RenderSectionStore.Key,CachedSection> next=new HashMap<>();
+  Map<RenderSectionStore.Key,CachedSection> next=batch.full() ? new HashMap<>() : new HashMap<>(cachedSections);
+  Set<Long> touched=new HashSet<>();
+  for(var key:batch.removed()) { next.remove(key); touched.add(key.section()); }
   for(var entry:batch.snapshot().sections().entrySet()) {
+   touched.add(entry.getKey().section());
    long key=entry.getKey().section(); newest=Math.max(newest,entry.getValue().capturedMs());
    CachedSection old=cachedSections.get(entry.getKey());
    if(old!=null && RenderSectionStore.sameLayers(old.layers(),entry.getValue().layers())) {
@@ -338,11 +406,14 @@ public final class GeometryLayer {
   cachedSections.clear(); cachedSections.putAll(next);
   staticByPass.clear();
   for(var section:cachedSections.values()) for(Mesh mesh:section.meshes()) staticByPass.computeIfAbsent(mesh.pass(),k->new ArrayList<>()).add(mesh);
-  acceptedGeneration=generation; acceptedRevision=revision; remoteSnapshot=batch.snapshot();
-  TerrainMeshes.invalidate();
+  if(batch.full()) remoteSections.clear();
+  for(var key:batch.removed()) remoteSections.remove(key);
+  remoteSections.putAll(batch.snapshot().sections());
+  acceptedGeneration=generation; acceptedRevision=revision; remoteSnapshot=new RenderSectionStore.Snapshot(generation,revision,remoteSections);
+  if(batch.full()) TerrainMeshes.invalidate(); else TerrainMeshes.invalidateSections(touched);
   long now=System.currentTimeMillis();
-  MmlfLog.info("experiment","geometry_upload",Map.of("sections",sections,"vertices",vertices,"bytes",data.length,"uploadMicros",(System.nanoTime()-started)/1000,"reusedSections",reused,"rebuiltSections",rebuilt,
-   "exportToUploadMs",now-exportedMs,"captureToUploadMs",newest==0?-1:now-newest));
+  MmlfLog.sampled("experiment","geometry_upload",1000,Map.of("full",batch.full(),"sections",sections,"removed",batch.removed().size(),"totalSections",cachedSections.size(),"vertices",vertices,"bytes",size,
+   "uploadMicros",(System.nanoTime()-started)/1000,"reusedSections",reused,"rebuiltSections",rebuilt,"exportToUploadMs",now-exportedMs));
  }
  private static boolean atlasCurrent() { return atlas!=null && atlasGeneration==acceptedGeneration; }
 

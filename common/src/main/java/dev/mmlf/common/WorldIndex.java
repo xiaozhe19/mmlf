@@ -26,8 +26,34 @@ public final class WorldIndex {
     public synchronized List<ObjectState> snapshot() { return List.copyOf(objects.values()); }
     public synchronized void removeOwner(String owner) {
         objects.values().removeIf(o -> { if (!o.owner().equals(owner)) return false; locations.remove(o.location()); return true; });
+        blocks.remove(owner);
+    }
+
+    /** Per owner, per chunk ("dimension@x,z"), its latest {@link ChunkBlocks}. */
+    private final Map<String,Map<String,ChunkBlocks>> blocks = new HashMap<>();
+    public synchronized void updateBlocks(String sender, ChunkBlocks next) {
+        if (!sender.equals(next.owner()) || next.dimension() == null) throw new IllegalArgumentException("blocks owner mismatch");
+        int kinds = next.kinds() == null ? 0 : next.kinds().size();
+        if (next.positions() == null || next.positions().length != kinds) throw new IllegalArgumentException("invalid chunk blocks");
+        for (int[] positions : next.positions()) if (positions == null) throw new IllegalArgumentException("invalid chunk blocks");
+        var own = blocks.computeIfAbsent(sender, k -> new HashMap<>());
+        if (next.empty()) own.remove(next.chunkKey()); else own.put(next.chunkKey(), next);
+    }
+    public synchronized List<ChunkBlocks> blocksSnapshot() {
+        List<ChunkBlocks> out = new ArrayList<>();
+        for (var own : blocks.values()) out.addAll(own.values());
+        return out;
+    }
+    /** Whether {@code owner} last reported one of its plain blocks at the position. */
+    public synchronized boolean ownsBlock(String owner, String dimension, int x, int y, int z) {
+        var own = blocks.get(owner); if (own == null) return false;
+        ChunkBlocks chunk = own.get(dimension + "@" + (x >> 4) + "," + (z >> 4)); if (chunk == null) return false;
+        int packed = packInChunk(x, y, z);
+        for (int[] positions : chunk.positions()) for (int p : positions) if (p == packed) return true;
+        return false;
     }
     public synchronized boolean valid(String owner, RayHit hit) {
+        if (isBulkId(hit.objectId())) throw new IllegalArgumentException("a hit on plain blocks is checked with ownsBlock");
         ObjectState o = objects.get(hit.objectId());
         return o != null && o.owner().equals(owner) && o.revision() == hit.revision();
     }

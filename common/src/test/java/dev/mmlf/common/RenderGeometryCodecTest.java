@@ -24,9 +24,21 @@ class RenderGeometryCodecTest {
         store.submit(8, 23, List.of(new RenderSectionStore.Layer("solid", 4, new byte[128])));
         byte[] encoded = RenderGeometryCodec.encode(new RenderGeometryCodec.Batch("fabric", "world", 0, store.snapshot()));
         assertThrows(IOException.class, () -> RenderGeometryCodec.decode(Arrays.copyOf(encoded, encoded.length - 1)));
-        encoded[7] = 7;
+        encoded[7] = 99;
         assertThrows(IOException.class, () -> RenderGeometryCodec.decode(encoded));
         assertThrows(IllegalArgumentException.class, () -> new RenderSectionStore.Layer("solid", 4, new byte[4]));
+    }
+
+    @Test void aChangeCarriesOnlyChangedAndRemovedSections() throws Exception {
+        var changed = new RenderSectionStore.Snapshot(3, 9, Map.of(new RenderSectionStore.Key("minecraft:sections", 5), new RenderSectionStore.Section(1, List.of(new RenderSectionStore.Layer("solid", 4, new byte[128])))));
+        var decoded = RenderGeometryCodec.decode(RenderGeometryCodec.encode(new RenderGeometryCodec.Batch("neo", "world", 7, changed, false,
+            List.of(new RenderSectionStore.Key("minecraft:sections", 6), new RenderSectionStore.Key("other", -2)))));
+        assertFalse(decoded.full());
+        assertEquals(List.of(new RenderSectionStore.Key("minecraft:sections", 6), new RenderSectionStore.Key("other", -2)), decoded.removed());
+        assertEquals(Set.of(new RenderSectionStore.Key("minecraft:sections", 5)), decoded.snapshot().sections().keySet());
+        assertEquals(3, decoded.snapshot().generation());
+        assertTrue(RenderGeometryCodec.decode(RenderGeometryCodec.encode(new RenderGeometryCodec.Batch("neo", "world", 7, changed))).full());
+        assertThrows(IOException.class, () -> RenderGeometryCodec.encode(new RenderGeometryCodec.Batch("neo", "world", 7, changed, true, List.of(new RenderSectionStore.Key("x", 1)))));
     }
 
     @Test void transportsCustomMeshWithoutAssumingItsLayout() throws Exception {

@@ -36,6 +36,25 @@ public final class Messages {
         }
         public String location() { return dimension + ":" + x + ":" + y + ":" + z; }
     }
+    /**
+     * The plain blocks a runtime owns in one chunk, all at once (ores, plants: no block entity, no redstone), in place
+     * of one {@link ObjectState} each; a newer one replaces the chunk's previous one, and one with no kinds removes it.
+     * {@code positions[i]} are the positions of {@code kinds[i]}, packed by {@link #packInChunk}.
+     */
+    public record ChunkBlocks(String owner, String dimension, int x, int z, List<BlockKind> kinds, int[][] positions) {
+        public String chunkKey() { return dimension + "@" + x + "," + z; }
+        public boolean empty() { return kinds == null || kinds.isEmpty(); }
+    }
+    /** One block state of a {@link ChunkBlocks}: its block id and the same properties an {@link ObjectState} carries. */
+    public record BlockKind(String type, Map<String,String> state) {}
+    /** A block position within its chunk, as {@link ChunkBlocks} carries it: x and z within the chunk, y as is. */
+    public static int packInChunk(int x, int y, int z) { return (y << 8) | ((z & 15) << 4) | (x & 15); }
+    public static int unpackX(int chunkX, int packed) { return (chunkX << 4) | (packed & 15); }
+    public static int unpackY(int packed) { return packed >> 8; }
+    public static int unpackZ(int chunkZ, int packed) { return (chunkZ << 4) | ((packed >> 4) & 15); }
+    /** The object id a ray hit on one of a runtime's {@link ChunkBlocks} carries. */
+    public static String bulkId(String owner) { return "bulk@" + owner; }
+    public static boolean isBulkId(String id) { return id != null && id.startsWith("bulk@"); }
     public static String objectId(String owner, String dimension, int x, int y, int z) { return objectId(owner,dimension,x,y,z,0); }
     public static String objectId(String owner, String dimension, int x, int y, int z, long generation) {
         return UUID.nameUUIDFromBytes((owner + "|" + dimension + "|" + x + "|" + y + "|" + z + (generation==0 ? "" : "|" + generation))

@@ -333,6 +333,15 @@ public final class InventoryBridge {
         stack.set(DataComponents.CUSTOM_NAME,Component.literal((name==null?"?":name)+" [远端物品 / "+owner+"]"));
         return stack;
     }
+    /**
+     * Whether a stack only stands for an item of another runtime (a proxy, an encoded proxy or a placeholder). Its base
+     * item (paper, a barrier) is not what it is, so recipes, trades and other uses of that base item must not take it.
+     */
+    public static boolean standsIn(ItemStack stack) {
+        if(stack==null || stack.isEmpty()) return false;
+        CustomData data=stack.get(DataComponents.CUSTOM_DATA); if(data==null) return false;
+        return data.contains(PLACEHOLDER) || data.contains(ENCODED) || data.contains("mmlf_item");
+    }
     public static boolean isPlaceholder(ItemStack stack) {
         CustomData data=stack.get(DataComponents.CUSTOM_DATA); return data!=null && data.contains(PLACEHOLDER);
     }

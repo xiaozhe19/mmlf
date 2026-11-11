@@ -3,13 +3,22 @@ package dev.mmlf.common;
 import java.io.*;
 import java.util.*;
 
-/** Versioned transport of explicitly described mesh layouts. Unsupported layouts must not be reinterpreted. */
+/**
+ * Versioned transport of explicitly described mesh layouts. Unsupported layouts must not be reinterpreted.
+ * <p>
+ * A batch is either the whole scene ({@code full}) or a change to the previous batch of the same scene generation: its
+ * snapshot then holds only the sections that changed, and {@code removed} the sections that went away.
+ */
 public final class RenderGeometryCodec {
     private RenderGeometryCodec() {}
-    private static final int MAGIC = 0x4d4d5247, VERSION = 6;
+    private static final int MAGIC = 0x4d4d5247, VERSION = 7;
     public static final int MAX_FILE = 128 * 1024 * 1024;
     private static final int MAX_SECTIONS = 65536, MAX_LAYERS = 32;
-    public record Batch(String runtime, String dimension, long exportedMs, RenderSectionStore.Snapshot snapshot) {}
+    public record Batch(String runtime, String dimension, long exportedMs, RenderSectionStore.Snapshot snapshot, boolean full, List<RenderSectionStore.Key> removed) {
+        public Batch { removed = List.copyOf(removed); }
+        /** The whole scene. */
+        public Batch(String runtime, String dimension, long exportedMs, RenderSectionStore.Snapshot snapshot) { this(runtime, dimension, exportedMs, snapshot, true, List.of()); }
+    }
 
     public static byte[] encode(Batch batch) throws IOException {
         if (batch.runtime() == null || batch.runtime().isBlank() || batch.dimension() == null || batch.dimension().isBlank())
@@ -19,6 +28,11 @@ public final class RenderGeometryCodec {
         out.writeInt(MAGIC); out.writeInt(VERSION);
         out.writeUTF(batch.runtime()); out.writeUTF(batch.dimension());
         out.writeLong(batch.exportedMs()); out.writeLong(batch.snapshot().generation()); out.writeLong(batch.snapshot().revision());
+        out.writeBoolean(batch.full());
+        if (batch.full() && !batch.removed().isEmpty()) throw new IOException("the whole scene has nothing removed");
+        if (batch.removed().size() > MAX_SECTIONS) throw new IOException("too many sections");
+        out.writeInt(batch.removed().size());
+        for (var key : batch.removed()) { out.writeUTF(key.producer()); out.writeLong(key.section()); }
         var sections = new TreeMap<RenderSectionStore.Key,RenderSectionStore.Section>(Comparator.comparing(RenderSectionStore.Key::producer).thenComparingLong(RenderSectionStore.Key::section));
         sections.putAll(batch.snapshot().sections());
         if (sections.size() > MAX_SECTIONS) throw new IOException("too many sections");
@@ -50,6 +64,15 @@ public final class RenderGeometryCodec {
         if (runtime.isBlank() || dimension.isBlank()) throw new IOException("missing scene identity");
         long exported = in.readLong(), generation = in.readLong(), revision = in.readLong();
         if (generation < 0 || revision < 0) throw new IOException("invalid scene generation or revision");
+        boolean full = in.readBoolean();
+        int removedCount = in.readInt();
+        if (removedCount < 0 || removedCount > MAX_SECTIONS || full && removedCount != 0) throw new IOException("invalid removed sections");
+        List<RenderSectionStore.Key> removed = new ArrayList<>();
+        for (int i = 0; i < removedCount; i++) {
+            String producer = in.readUTF(); long section = in.readLong();
+            if (producer.isBlank()) throw new IOException("missing producer");
+            removed.add(new RenderSectionStore.Key(producer, section));
+        }
         int count = in.readInt();
         if (count < 0 || count > MAX_SECTIONS) throw new IOException("invalid section count");
         Map<RenderSectionStore.Key, RenderSectionStore.Section> sections = new HashMap<>();
@@ -74,6 +97,6 @@ public final class RenderGeometryCodec {
             if (sections.put(new RenderSectionStore.Key(producer,key), new RenderSectionStore.Section(captured, layers)) != null) throw new IOException("duplicate section");
         }
         if (in.available() != 0) throw new IOException("trailing geometry bytes");
-        return new Batch(runtime, dimension, exported, new RenderSectionStore.Snapshot(generation, revision, sections));
+        return new Batch(runtime, dimension, exported, new RenderSectionStore.Snapshot(generation, revision, sections), full, removed);
     }
 }

@@ -20,7 +20,7 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 public abstract class ClientLevelMixin {
     @Inject(method="onChunkLoaded",at=@At("HEAD"),require=0)
     private void mmlf$chunkLoaded(ChunkPos pos,CallbackInfo ci) {
-        dev.mmlf.bridge.Occupancy.clientChunkLoaded((ClientLevel)(Object)this,pos);
+        dev.mmlf.bridge.render.TerrainMeshes.chunkLoaded((ClientLevel)(Object)this,pos);
         if(dev.mmlf.bridge.Experiments.GEOMETRY) OwnedSectionCompiler.chunkLoaded((ClientLevel)(Object)this,pos);
     }
     @Inject(method="unload",at=@At("HEAD"),require=0)
@@ -30,6 +30,8 @@ public abstract class ClientLevelMixin {
     @Inject(method="sendBlockUpdated",at=@At("HEAD"),require=0)
     private void mmlf$blockUpdated(BlockPos pos,BlockState old,BlockState now,int flags,CallbackInfo ci) {
         dev.mmlf.bridge.DemoScene.watch(pos,old,now,false);
+        // Stand-ins arrive with the server's map: the remote block's model is placed where one appears or goes.
+        if(dev.mmlf.bridge.StandInBlock.is(old) || dev.mmlf.bridge.StandInBlock.is(now)) dev.mmlf.bridge.render.TerrainMeshes.invalidateBlock(pos);
         if(dev.mmlf.bridge.Experiments.GEOMETRY) OwnedSectionCompiler.blockChanged((ClientLevel)(Object)this,pos);
     }
     @Inject(method="setBlocksDirty",at=@At("HEAD"),require=0)

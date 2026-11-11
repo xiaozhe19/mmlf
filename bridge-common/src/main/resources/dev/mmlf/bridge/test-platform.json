@@ -1,0 +1,276 @@
+{
+  "placements": [
+    {
+      "runtime": "neoforge",
+      "block": "create:creative_motor",
+      "x": 5,
+      "y": 100,
+      "z": 1,
+      "properties": {
+        "facing": "east"
+      },
+      "optional": true
+    },
+    {
+      "runtime": "neoforge",
+      "block": "create:cogwheel",
+      "x": 6,
+      "y": 100,
+      "z": 1,
+      "properties": {
+        "axis": "x"
+      },
+      "optional": true
+    },
+    {
+      "runtime": "fabric",
+      "block": "mmlf_fabric_test:demo_block",
+      "x": -1,
+      "y": 100,
+      "z": 0,
+      "optional": true
+    },
+    {
+      "runtime": "neoforge",
+      "block": "mmlf_neoforge_test:demo_block",
+      "x": 1,
+      "y": 100,
+      "z": 0,
+      "optional": true
+    },
+    {
+      "runtime": "fabric",
+      "block": "mcwdoors:oak_four_panel_door",
+      "x": -3,
+      "y": 100,
+      "z": 0,
+      "optional": true
+    },
+    {
+      "runtime": "neoforge",
+      "block": "mcwtrpdoors:oak_four_panel_trapdoor",
+      "x": 3,
+      "y": 100,
+      "z": 0,
+      "optional": true
+    },
+    {
+      "runtime": "fabric",
+      "block": "mmlf_fabric_test:gui_block",
+      "x": -1,
+      "y": 100,
+      "z": -3,
+      "optional": true
+    },
+    {
+      "runtime": "fabric",
+      "block": "mmlf_fabric_test:box_block",
+      "x": -2,
+      "y": 100,
+      "z": -3,
+      "optional": true
+    },
+    {
+      "runtime": "neoforge",
+      "block": "mmlf_neoforge_test:gui_block",
+      "x": 1,
+      "y": 100,
+      "z": -3,
+      "optional": true
+    },
+    {
+      "runtime": "neoforge",
+      "block": "mmlf_neoforge_test:box_block",
+      "x": 2,
+      "y": 100,
+      "z": -3,
+      "optional": true
+    },
+    {
+      "runtime": "fabric",
+      "block": "minecraft:chest",
+      "x": -6,
+      "y": 101,
+      "z": -3,
+      "properties": {
+        "facing": "south"
+      },
+      "items": [
+        "minecraft:cobblestone*32",
+        "minecraft:oak_log*16",
+        "minecraft:iron_ingot*8"
+      ],
+      "optional": true
+    },
+    {
+      "runtime": "fabric",
+      "block": "toms_storage:inventory_connector",
+      "x": -5,
+      "y": 101,
+      "z": -3,
+      "optional": true
+    },
+    {
+      "runtime": "fabric",
+      "block": "toms_storage:storage_terminal",
+      "x": -4,
+      "y": 101,
+      "z": -3,
+      "properties": {
+        "facing": "south"
+      },
+      "optional": true
+    },
+    {
+      "runtime": "neoforge",
+      "block": "farmersdelight:stove",
+      "x": 4,
+      "y": 100,
+      "z": -3,
+      "properties": {
+        "facing": "south",
+        "lit": "true"
+      },
+      "optional": true
+    },
+    {
+      "runtime": "neoforge",
+      "block": "farmersdelight:cooking_pot",
+      "x": 4,
+      "y": 101,
+      "z": -3,
+      "properties": {
+        "facing": "south"
+      },
+      "optional": true
+    },
+    {
+      "runtime": "background",
+      "block": "minecraft:oak_fence",
+      "x": 2,
+      "y": 100,
+      "z": 1,
+      "properties": {
+        "east": "true",
+        "south": "true"
+      },
+      "optional": true
+    },
+    {
+      "runtime": "background",
+      "block": "minecraft:oak_fence",
+      "x": 3,
+      "y": 100,
+      "z": 1,
+      "properties": {
+        "east": "true",
+        "west": "true"
+      },
+      "optional": true
+    },
+    {
+      "runtime": "background",
+      "block": "minecraft:oak_fence",
+      "x": 4,
+      "y": 100,
+      "z": 1,
+      "properties": {
+        "west": "true",
+        "south": "true"
+      },
+      "optional": true
+    },
+    {
+      "runtime": "background",
+      "block": "minecraft:oak_fence",
+      "x": 2,
+      "y": 100,
+      "z": 2,
+      "properties": {
+        "north": "true",
+        "south": "true"
+      },
+      "optional": true
+    },
+    {
+      "runtime": "background",
+      "block": "minecraft:oak_fence",
+      "x": 4,
+      "y": 100,
+      "z": 2,
+      "properties": {
+        "north": "true",
+        "south": "true"
+      },
+      "optional": true
+    },
+    {
+      "runtime": "background",
+      "block": "minecraft:oak_fence",
+      "x": 2,
+      "y": 100,
+      "z": 3,
+      "properties": {
+        "north": "true",
+        "east": "true"
+      },
+      "optional": true
+    },
+    {
+      "runtime": "background",
+      "block": "minecraft:oak_fence",
+      "x": 3,
+      "y": 100,
+      "z": 3,
+      "properties": {
+        "east": "true",
+        "west": "true"
+      },
+      "optional": true
+    },
+    {
+      "runtime": "background",
+      "block": "minecraft:oak_fence",
+      "x": 4,
+      "y": 100,
+      "z": 3,
+      "properties": {
+        "west": "true",
+        "north": "true"
+      },
+      "optional": true
+    },
+    {
+      "runtime": "background",
+      "block": "minecraft:composter",
+      "x": -3,
+      "y": 100,
+      "z": 5,
+      "optional": true
+    }
+  ],
+  "entities": [
+    {
+      "runtime": "background",
+      "type": "minecraft:villager",
+      "x": -2.5,
+      "y": 100,
+      "z": 2.5,
+      "yaw": 0,
+      "profession": "minecraft:farmer",
+      "name": "{owner} 村民"
+    },
+    {
+      "runtime": "background",
+      "type": "minecraft:zombie",
+      "x": 3.5,
+      "y": 100,
+      "z": 2.5,
+      "yaw": 0,
+      "equipment": {
+        "head": "minecraft:leather_helmet"
+      },
+      "name": "{owner} 僵尸"
+    }
+  ]
+}

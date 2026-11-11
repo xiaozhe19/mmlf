@@ -9,13 +9,24 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 public abstract class MinecraftMixin {
  @org.spongepowered.asm.mixin.Shadow private int rightClickDelay;
  @org.spongepowered.asm.mixin.Unique private boolean mmlf$useHeld;
+ /**
+  * Every use goes through the Coordinator. Holding the key repeats it every 4 ticks as vanilla's own repeat does
+  * (placing a row of blocks); the repeat also keeps an owner's held use of an item going (BridgeCore.useAir).
+  */
  @Inject(method="startUseItem",at=@At("HEAD"),cancellable=true)
  private void mmlf$use(CallbackInfo ci) {
-  if(mmlf$useHeld) {rightClickDelay=4;ci.cancel();return;}
   if(BridgeCore.requestInteraction()) {mmlf$useHeld=true;rightClickDelay=4;ci.cancel();}
  }
  @Inject(method="tick",at=@At("TAIL"))
- private void mmlf$release(CallbackInfo ci) { if(!((Minecraft)(Object)this).options.keyUse.isDown()) mmlf$useHeld=false; }
+ private void mmlf$release(CallbackInfo ci) {
+  if(mmlf$useHeld && !((Minecraft)(Object)this).options.keyUse.isDown()) { mmlf$useHeld=false; BridgeCore.useReleased(); }
+ }
+ /** An owner using an item for the primary keeps using it while the primary holds the key; its own key is never down. */
+ @com.llamalad7.mixinextras.injector.wrapoperation.WrapOperation(method="handleKeybinds",at=@At(value="INVOKE",target="Lnet/minecraft/client/multiplayer/MultiPlayerGameMode;releaseUsingItem(Lnet/minecraft/world/entity/player/Player;)V"))
+ private void mmlf$keepUsing(net.minecraft.client.multiplayer.MultiPlayerGameMode mode,net.minecraft.world.entity.player.Player player,com.llamalad7.mixinextras.injector.wrapoperation.Operation<Void> original) {
+  if(BridgeCore.primaryUsing()) return;
+  original.call(mode,player);
+ }
  @Inject(method="startAttack",at=@At("HEAD"),cancellable=true)
  private void mmlf$attack(org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable<Boolean> ci) { if(BridgeCore.requestInteraction("attack")) ci.setReturnValue(true); }
  @Inject(method="continueAttack",at=@At("HEAD"),cancellable=true)
@@ -50,6 +61,9 @@ public abstract class MinecraftMixin {
   if(!world) { BridgeCore.drainExportedFrames(); dev.mmlf.bridge.render.NativeWorld.keepClientWorld(mc); }
   original.call(renderer,delta,world);
  }
+ /** A background pauses with the primary: its integrated server reads this to stop ticking (and saves as it does). */
+ @Inject(method="isPaused",at=@At("HEAD"),cancellable=true)
+ private void mmlf$followPause(org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable<Boolean> ci) { if(BridgeCore.primaryPaused() || dev.mmlf.bridge.SaveSync.frozen()) ci.setReturnValue(true); }
  @Inject(method="pickBlock",at=@At("HEAD"),cancellable=true)
  private void mmlf$pick(CallbackInfo ci) {if(BridgeCore.requestInteraction("pick")) ci.cancel();}
 }

@@ -106,6 +106,8 @@ public final class DynamicCapture {
     public static boolean owned(Entity entity) {
         if(entity instanceof RemoteProxy || entity instanceof Player) return false;
         if(dev.mmlf.bridge.RemoteEntities.claimed(entity.getUUID())) return true;
+        // Claimed before the world was saved: its server copy carries the tag (the client copy learns it from the set).
+        if(!entity.level().isClientSide() && entity.getTags().contains(dev.mmlf.bridge.RemoteEntities.OWNED_TAG)) { dev.mmlf.bridge.RemoteEntities.claim(entity.getUUID()); return true; }
         if(!BuiltInRegistries.ENTITY_TYPE.getKey(entity.getType()).getNamespace().equals("minecraft")) return true;
         // Vanilla carriers of this runtime's content.
         if(entity instanceof ItemEntity item) return foreign(BuiltInRegistries.ITEM.getKey(item.getItem().getItem()).getNamespace());

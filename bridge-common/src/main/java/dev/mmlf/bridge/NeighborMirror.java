@@ -118,10 +118,10 @@ public final class NeighborMirror {
         if(!loaded) return;
         reflag(chunk);
     }
-    /** Whether reads of the chunk consult an overlay: mirrored neighbours here, or other runtimes' blocks ({@link Occupancy}). */
+    /** Whether reads of the chunk consult an overlay: mirrored neighbours here. */
     static void reflag(LevelChunk chunk) {
         var states=overlay.get(chunk.getLevel().dimension().location().toString());
-        ((Overlaid)chunk).mmlf$setOverlaid(states!=null && hasAny(states,chunk) || Occupancy.covers(chunk));
+        ((Overlaid)chunk).mmlf$setOverlaid(states!=null && hasAny(states,chunk));
     }
     private static boolean hasAny(Map<Long,BlockState> states,LevelChunk chunk) {
         var cp=chunk.getPos();
