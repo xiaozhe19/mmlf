@@ -1,6 +1,5 @@
 package dev.mmlf.bridge.mixin;
 import com.mojang.blaze3d.platform.Window;
-import dev.mmlf.bridge.BridgeCore;
 import org.lwjgl.glfw.GLFW;
 import org.spongepowered.asm.mixin.Final;
 import org.spongepowered.asm.mixin.Mixin;
@@ -13,13 +12,13 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 public abstract class WindowMixin {
  @Shadow @Final private long window;
  @Inject(method="<init>",at=@At(value="INVOKE",target="Lorg/lwjgl/glfw/GLFW;glfwDefaultWindowHints()V",shift=At.Shift.AFTER),require=0)
- private void mmlf$invisible(CallbackInfo ci) { if(BridgeCore.hiddenBackground()) GLFW.glfwWindowHint(GLFW.GLFW_VISIBLE,GLFW.GLFW_FALSE); }
+ private void mmlf$invisible(CallbackInfo ci) { if(dev.mmlf.bridge.BridgeEntry.hiddenBackground()) GLFW.glfwWindowHint(GLFW.GLFW_VISIBLE,GLFW.GLFW_FALSE); }
  @org.spongepowered.asm.mixin.Unique private static long mmlf$hostTable;
  /** In-JVM: this runtime's LWJGL builds its own JVM-wide GL fallback table instead of failing on the host's. */
  @Inject(method="<init>",at=@At(value="INVOKE",target="Lorg/lwjgl/opengl/GL;createCapabilities()Lorg/lwjgl/opengl/GLCapabilities;"))
- private void mmlf$beforeGl(CallbackInfo ci) { mmlf$hostTable=dev.mmlf.bridge.InJvmLwjgl.yieldMissingTable(); }
+ private void mmlf$beforeGl(CallbackInfo ci) { mmlf$hostTable=dev.mmlf.bridge.platform.InJvmLwjgl.yieldMissingTable(); }
  @Inject(method="<init>",at=@At(value="INVOKE",target="Lorg/lwjgl/opengl/GL;createCapabilities()Lorg/lwjgl/opengl/GLCapabilities;",shift=At.Shift.AFTER))
- private void mmlf$afterGl(CallbackInfo ci) { dev.mmlf.bridge.InJvmLwjgl.restoreMissingTable(mmlf$hostTable); mmlf$hostTable=0; }
+ private void mmlf$afterGl(CallbackInfo ci) { dev.mmlf.bridge.platform.InJvmLwjgl.restoreMissingTable(mmlf$hostTable); mmlf$hostTable=0; }
  @Inject(method="<init>",at=@At("RETURN"))
- private void mmlf$hide(CallbackInfo ci) { if(BridgeCore.hiddenBackground()) GLFW.glfwHideWindow(window); }
+ private void mmlf$hide(CallbackInfo ci) { if(dev.mmlf.bridge.BridgeEntry.hiddenBackground()) GLFW.glfwHideWindow(window); }
 }

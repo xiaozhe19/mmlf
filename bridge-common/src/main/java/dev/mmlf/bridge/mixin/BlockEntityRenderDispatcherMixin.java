@@ -19,6 +19,6 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 public abstract class BlockEntityRenderDispatcherMixin {
     @Inject(method="render",at=@At("HEAD"),cancellable=true)
     private <E extends BlockEntity> void mmlf$hidden(E blockEntity,float partial,PoseStack poseStack,MultiBufferSource buffers,CallbackInfo ci) {
-        if(NativeWorld.hidden()) ci.cancel();
+        if(NativeWorld.hides(blockEntity)) ci.cancel();
     }
 }

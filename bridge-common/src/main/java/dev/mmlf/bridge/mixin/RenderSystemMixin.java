@@ -1,6 +1,5 @@
 package dev.mmlf.bridge.mixin;
 import com.mojang.blaze3d.systems.RenderSystem;
-import dev.mmlf.bridge.BridgeCore;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.injection.*;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
@@ -13,8 +12,8 @@ public abstract class RenderSystemMixin {
   */
  @Inject(method="limitDisplayFPS",at=@At("HEAD"),cancellable=true,remap=false)
  private static void mmlf$wait(int fps,CallbackInfo ci) {
-  if(dev.mmlf.bridge.RuntimeContext.current().sessionPath()==null && !BridgeCore.connected()) return;
-  int target=BridgeCore.connected() && !BridgeCore.isPrimary() ? BridgeCore.backgroundFps() : fps;
+  if(dev.mmlf.bridge.platform.RuntimeContext.current().sessionPath()==null && !dev.mmlf.bridge.transport.SessionLink.connected()) return;
+  int target=dev.mmlf.bridge.transport.SessionLink.connected() && !dev.mmlf.bridge.transport.SessionLink.isPrimary() ? dev.mmlf.bridge.render.CameraPublisher.backgroundFps() : fps;
   long now=System.nanoTime(),wait=1_000_000_000L/Math.max(1,target)-(now-mmlf$last);
   if(wait>0) java.util.concurrent.locks.LockSupport.parkNanos(wait);
   mmlf$last=System.nanoTime(); ci.cancel();

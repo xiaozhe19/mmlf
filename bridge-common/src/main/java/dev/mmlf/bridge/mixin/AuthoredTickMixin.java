@@ -1,6 +1,6 @@
 package dev.mmlf.bridge.mixin;
 
-import dev.mmlf.bridge.SharedWorld;
+import dev.mmlf.bridge.collab.SharedWorld;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.SectionPos;
 import net.minecraft.server.level.ServerLevel;
@@ -39,7 +39,7 @@ public abstract class AuthoredTickMixin {
     private void mmlf$blockBegin(BlockPos pos,Block block,CallbackInfo ci) {
         ServerLevel level=(ServerLevel)(Object)this;
         if(!SharedWorld.covered(level,pos.getX()>>4,pos.getZ()>>4)) { level.scheduleTick(pos,block,1); SharedWorld.begin(false); ci.cancel(); return; }
-        SharedWorld.begin(SharedWorld.ownBlock(block.defaultBlockState(),pos));
+        SharedWorld.begin(SharedWorld.ownBlock(level,block.defaultBlockState(),pos));
     }
     @Inject(method="tickBlock",at=@At("RETURN"))
     private void mmlf$blockEnd(BlockPos pos,Block block,CallbackInfo ci) { SharedWorld.end(); }

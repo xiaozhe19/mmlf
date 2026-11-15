@@ -2,7 +2,7 @@ package dev.mmlf.bridge.mixin;
 
 import com.llamalad7.mixinextras.injector.wrapoperation.Operation;
 import com.llamalad7.mixinextras.injector.wrapoperation.WrapOperation;
-import dev.mmlf.bridge.CoGeneration;
+import dev.mmlf.bridge.collab.CoGeneration;
 import net.minecraft.world.level.StructureManager;
 import net.minecraft.world.level.WorldGenLevel;
 import net.minecraft.world.level.chunk.ChunkAccess;

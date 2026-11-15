@@ -110,17 +110,27 @@ public final class SessionHost implements AutoCloseable {
     static final String STAGED=".mmlf-staged";
 
     /**
-     * Copies only archives whose metadata names this loader; ambiguous archives are skipped and reported. Archives an
-     * earlier staging copied there are removed first, so a mod set never leaks into the next run; others stay.
+     * Stages only archives for this loader. A file is managed only while its contents match the last staged copy.
      */
     public static void stageMods(Path mods,ModClassifier.Loader loader,Path destination) throws Exception {
-        Files.createDirectories(mods); Files.createDirectories(destination);
+        Files.createDirectories(mods);
+        Files.createDirectories(destination);
         Path record=destination.resolve(STAGED);
-        if(Files.isRegularFile(record)) for(String name:Files.readAllLines(record)) {
-            if(name.isBlank() || name.contains("/") || name.contains("\\")) continue;
-            Files.deleteIfExists(destination.resolve(name));
+        Map<String,String> managed=new LinkedHashMap<>();
+        if(Files.isRegularFile(record)) for(String line:Files.readAllLines(record)) {
+            String[] entry=line.split("\t",2);
+            if(entry.length==2 && entry[0].matches("[0-9a-f]{64}") && entry[1].matches("[^/\\\\]+(?i:\\.jar)")) {
+                Path target=destination.resolve(entry[1]);
+                if(Files.isRegularFile(target,java.nio.file.LinkOption.NOFOLLOW_LINKS) && digest(target).equals(entry[0]))
+                    managed.put(entry[1],entry[0]);
+            } else if(entry.length==1 && line.matches("[^/\\\\\t]+(?i:\\.jar)")) {
+                // A record from before contents were recorded (names only): those files were staged, and are taken
+                // over as they are now, so the earlier mod set still goes away instead of doubling a mod.
+                Path target=destination.resolve(line);
+                if(Files.isRegularFile(target,java.nio.file.LinkOption.NOFOLLOW_LINKS)) managed.put(line,digest(target));
+            }
         }
-        List<String> staged=new ArrayList<>();
+        Set<String> wanted=new HashSet<>();
         try(var paths=Files.list(mods)) {
             for(Path file:paths.filter(Files::isRegularFile).filter(p->p.toString().toLowerCase(Locale.ROOT).endsWith(".jar")).toList()) {
                 var result=ModClassifier.classify(file);
@@ -129,12 +139,58 @@ public final class SessionHost implements AutoCloseable {
                         System.err.println("MMLF: skipped "+file.getFileName()+": "+result.loader()+" ("+result.detail()+")");
                     continue;
                 }
-                Files.copy(file,destination.resolve(file.getFileName()),StandardCopyOption.REPLACE_EXISTING);
-                staged.add(file.getFileName().toString());
-                System.out.println("MMLF: staged "+file.getFileName()+" to "+loader+"; loader checks dependencies at startup");
+                String name=file.getFileName().toString();
+                Path target=destination.resolve(name);
+                wanted.add(name);
+                boolean owned=managed.containsKey(name);
+                if(!owned && Files.exists(target,java.nio.file.LinkOption.NOFOLLOW_LINKS)) {
+                    System.err.println("MMLF: kept existing mod "+target+"; staging skipped the same name");
+                    continue;
+                }
+                String hash=digest(file);
+                if(hash.equals(managed.get(name))) continue;
+                Path temporary=Files.createTempFile(destination,".mmlf-mod-",".tmp");
+                try {
+                    Files.copy(file,temporary,StandardCopyOption.REPLACE_EXISTING);
+                    hash=digest(temporary);
+                    if(owned) {
+                        if(!Files.isRegularFile(target,java.nio.file.LinkOption.NOFOLLOW_LINKS) || !managed.get(name).equals(digest(target))) {
+                            managed.remove(name);
+                            continue;
+                        }
+                        Files.move(temporary,target,StandardCopyOption.ATOMIC_MOVE,StandardCopyOption.REPLACE_EXISTING);
+                    } else Files.move(temporary,target);
+                    managed.put(name,hash);
+                } finally {
+                    Files.deleteIfExists(temporary);
+                }
+                System.out.println("MMLF: staged "+name+" to "+loader+"; loader checks dependencies at startup");
+            }
+            for(var it=managed.keySet().iterator();it.hasNext();) {
+                String name=it.next();
+                if(wanted.contains(name)) continue;
+                Path target=destination.resolve(name);
+                if(Files.isRegularFile(target,java.nio.file.LinkOption.NOFOLLOW_LINKS) && managed.get(name).equals(digest(target)))
+                    Files.delete(target);
+                it.remove();
+            }
+        } finally {
+            Path temporary=Files.createTempFile(destination,".mmlf-manifest-",".tmp");
+            try {
+                Files.write(temporary,managed.entrySet().stream().map(e->e.getValue()+"\t"+e.getKey()).toList());
+                Files.move(temporary,record,StandardCopyOption.ATOMIC_MOVE,StandardCopyOption.REPLACE_EXISTING);
+            } finally {
+                Files.deleteIfExists(temporary);
             }
         }
-        Files.write(record,staged);
+    }
+
+    private static String digest(Path file) throws Exception {
+        var sha=java.security.MessageDigest.getInstance("SHA-256");
+        try(var input=new java.security.DigestInputStream(Files.newInputStream(file),sha)) {
+            input.transferTo(java.io.OutputStream.nullOutputStream());
+        }
+        return HexFormat.of().formatHex(sha.digest());
     }
 
     /** Stops the Coordinator; the runtimes belong to the {@link dev.mmlf.launcher.runtime.RuntimeManager}. */

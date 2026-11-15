@@ -1,5 +1,4 @@
 package dev.mmlf.bridge.mixin;
-import dev.mmlf.bridge.BridgeCore;
 import net.minecraft.client.renderer.block.BlockRenderDispatcher;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.registries.BuiltInRegistries;
@@ -16,6 +15,8 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 public abstract class BlockRenderDispatcherMixin {
  @Inject(method="renderBatched",at=@At("HEAD"),cancellable=true)
  private void mmlf$filter(BlockState state,BlockPos pos,BlockAndTintGetter level,PoseStack pose,VertexConsumer vertices,boolean cull,RandomSource random,CallbackInfo ci) {
-  if(!BridgeCore.renderOwned(state,pos)) ci.cancel();
+  boolean owned=level instanceof net.minecraft.world.level.Level world
+      ? dev.mmlf.bridge.collab.RenderInputs.blockOwned(world,state,pos) : dev.mmlf.bridge.collab.RenderInputs.blockOwned(state,pos);
+  if(!owned) ci.cancel();
  }
 }

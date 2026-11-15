@@ -1,5 +1,4 @@
 package dev.mmlf.bridge.mixin;
-import dev.mmlf.bridge.BridgeCore;
 import net.minecraft.client.resources.model.BakedModel;
 import net.minecraft.core.BlockPos;
 import net.minecraft.world.level.block.state.BlockState;
@@ -19,7 +18,7 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 public abstract class SodiumBlockRendererMixin {
  @Inject(method="renderModel",at=@At("HEAD"),cancellable=true,require=0,remap=false)
  private void mmlf$owned(BakedModel model,BlockState state,BlockPos pos,BlockPos origin,CallbackInfo ci) {
-  boolean accepted=BridgeCore.renderOwnedInSection(state,pos);
+  boolean accepted=!dev.mmlf.bridge.render.OwnedSectionCompiler.hiddenInSection(pos) && dev.mmlf.bridge.collab.RenderInputs.drawsCell(state,pos);
   dev.mmlf.bridge.render.RenderPathEvidence.observed(true,accepted);
   if(!accepted) ci.cancel();
  }

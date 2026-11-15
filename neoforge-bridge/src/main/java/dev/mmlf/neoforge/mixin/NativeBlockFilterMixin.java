@@ -1,5 +1,4 @@
 package dev.mmlf.neoforge.mixin;
-import dev.mmlf.bridge.BridgeCore;
 import net.minecraft.client.renderer.block.BlockRenderDispatcher;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.registries.BuiltInRegistries;
@@ -17,6 +16,6 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 public abstract class NativeBlockFilterMixin {
  @Inject(method="renderBatched(Lnet/minecraft/world/level/block/state/BlockState;Lnet/minecraft/core/BlockPos;Lnet/minecraft/world/level/BlockAndTintGetter;Lcom/mojang/blaze3d/vertex/PoseStack;Lcom/mojang/blaze3d/vertex/VertexConsumer;ZLnet/minecraft/util/RandomSource;Lnet/neoforged/neoforge/client/model/data/ModelData;Lnet/minecraft/client/renderer/RenderType;)V",at=@At("HEAD"),cancellable=true)
  private void filter(BlockState state,BlockPos pos,BlockAndTintGetter level,PoseStack pose,VertexConsumer vertices,boolean cull,RandomSource random,ModelData data,RenderType type,CallbackInfo ci) {
-  if(!BridgeCore.renderOwned(state,pos)) ci.cancel();
+  if(!dev.mmlf.bridge.collab.RenderInputs.blockOwned(state,pos)) ci.cancel();
  }
 }

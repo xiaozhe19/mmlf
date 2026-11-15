@@ -43,7 +43,7 @@ public final class ReleaseSupport {
             for(Path file:files.filter(Files::isRegularFile).filter(p->p.getFileName().toString().toLowerCase(Locale.ROOT).endsWith(".jar")).sorted().toList()) {
                 if(ModClassifier.classify(file).loader()!=loader) continue;
                 mods.add(file);
-                try(ZipFile zip=new ZipFile(file.toFile())) { bridge|=zip.getEntry("dev/mmlf/bridge/BridgeCore.class")!=null; }
+                try(ZipFile zip=new ZipFile(file.toFile())) { bridge|=zip.getEntry("dev/mmlf/bridge/BridgeEntry.class")!=null; }
             }
         }
         if(!bridge) throw new IllegalStateException(directory+" 中没有 MMLF "+NAMES.get(remote)+" 模组。请把它放进远端版本的 mods 文件夹。");

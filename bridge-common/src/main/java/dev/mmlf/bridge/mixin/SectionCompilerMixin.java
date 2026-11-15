@@ -3,7 +3,6 @@ import com.llamalad7.mixinextras.injector.wrapoperation.Operation;
 import com.llamalad7.mixinextras.injector.wrapoperation.WrapOperation;
 import com.llamalad7.mixinextras.sugar.Local;
 import com.mojang.blaze3d.vertex.VertexConsumer;
-import dev.mmlf.bridge.BridgeCore;
 import net.minecraft.client.renderer.block.BlockRenderDispatcher;
 import net.minecraft.client.renderer.chunk.SectionCompiler;
 import net.minecraft.core.BlockPos;
@@ -25,13 +24,13 @@ public abstract class SectionCompilerMixin {
  private RenderShape mmlf$owned(BlockState state,Operation<RenderShape> original,@Local(ordinal=2) BlockPos pos) {
   RenderShape shape=original.call(state);
   if(shape!=RenderShape.MODEL) return shape;
-  boolean accepted=BridgeCore.renderOwnedInSection(state,pos);
+  boolean accepted=!dev.mmlf.bridge.render.OwnedSectionCompiler.hiddenInSection(pos) && dev.mmlf.bridge.collab.RenderInputs.drawsCell(state,pos);
   dev.mmlf.bridge.render.RenderPathEvidence.observed(false,accepted);
   return accepted ? shape : RenderShape.INVISIBLE;
  }
  /** Experiment {@code geometry}: fluids follow the owner rule too, so submitted sections do not repeat the primary's water. */
  @WrapOperation(method="compile*",at=@At(value="INVOKE",target="Lnet/minecraft/client/renderer/block/BlockRenderDispatcher;renderLiquid(Lnet/minecraft/core/BlockPos;Lnet/minecraft/world/level/BlockAndTintGetter;Lcom/mojang/blaze3d/vertex/VertexConsumer;Lnet/minecraft/world/level/block/state/BlockState;Lnet/minecraft/world/level/material/FluidState;)V"),require=0)
  private void mmlf$ownedFluid(BlockRenderDispatcher dispatcher,BlockPos pos,BlockAndTintGetter level,VertexConsumer consumer,BlockState state,FluidState fluid,Operation<Void> original) {
-  if(!dev.mmlf.bridge.Experiments.GEOMETRY || BridgeCore.renderOwnedFluidInSection(fluid,pos)) original.call(dispatcher,pos,level,consumer,state,fluid);
+  if(!dev.mmlf.bridge.platform.Experiments.GEOMETRY || (!dev.mmlf.bridge.render.OwnedSectionCompiler.hiddenInSection(pos) && dev.mmlf.bridge.collab.RenderInputs.drawsFluid(fluid,pos))) original.call(dispatcher,pos,level,consumer,state,fluid);
  }
 }

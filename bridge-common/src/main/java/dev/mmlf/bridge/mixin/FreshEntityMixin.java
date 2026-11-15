@@ -1,6 +1,6 @@
 package dev.mmlf.bridge.mixin;
 
-import dev.mmlf.bridge.RemoteEntities;
+import dev.mmlf.bridge.collab.RemoteEntities;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.world.entity.Entity;
 import org.spongepowered.asm.mixin.Mixin;

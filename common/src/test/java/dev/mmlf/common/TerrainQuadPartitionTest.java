@@ -23,6 +23,14 @@ class TerrainQuadPartitionTest {
         assertArrayEquals(quad,map.get(near).get(0));
         assertTrue(TerrainQuadPartition.partition(quad,List.of()).isEmpty());
     }
+    @Test void cellsOfNamesTheBlockEachQuadBelongsTo() {
+        byte[] two=new byte[256];
+        System.arraycopy(face(1,.5f,.5f,(byte)127,(byte)0,(byte)0),0,two,0,128);   // east face of cell (0,0,0)
+        System.arraycopy(face(3.5f,4,7.5f,(byte)0,(byte)127,(byte)0),0,two,128,128); // top face of cell (3,3,7)
+        assertEquals(Set.of(new TerrainQuadPartition.Cell(0,0,0),new TerrainQuadPartition.Cell(3,3,7)),TerrainQuadPartition.cellsOf(two));
+        assertTrue(TerrainQuadPartition.cellsOf(face(17,.5f,.5f,(byte)0,(byte)0,(byte)0)).isEmpty(),"outside the section");
+        assertThrows(IllegalArgumentException.class,()->TerrainQuadPartition.cellsOf(new byte[3]));
+    }
     @Test void rejectsMalformedAndNonFiniteVertices() {
         assertThrows(IllegalArgumentException.class,()->TerrainQuadPartition.partition(new byte[1],List.of(new TerrainQuadPartition.Cell(0,0,0))));
         assertThrows(IllegalArgumentException.class,()->TerrainQuadPartition.partition(face(Float.NaN,0,0,(byte)0,(byte)0,(byte)0),List.of(new TerrainQuadPartition.Cell(0,0,0))));

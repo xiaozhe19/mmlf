@@ -1,8 +1,7 @@
 package dev.mmlf.bridge.render;
 
 import com.mojang.blaze3d.vertex.VertexSorting;
-import dev.mmlf.bridge.BridgeCore;
-import dev.mmlf.bridge.Experiments;
+import dev.mmlf.bridge.platform.Experiments;
 import dev.mmlf.common.MmlfLog;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.multiplayer.ClientLevel;
@@ -28,19 +27,22 @@ import java.util.concurrent.atomic.*;
  * installed (Sodium and similar replace the vanilla scheduling, not the compiler). Recompiles follow world-data
  * changes on {@link ClientLevel} rather than renderer callbacks, which such renderers override.
  * <p>
- * While the render host confirms it draws these meshes, this runtime's own section meshes leave out all static
- * blocks ({@link #hideNative()}), so the composited frame no longer duplicates them; without a fresh confirmation the
- * native meshes return and the full-frame fallback covers everything again.
+ * Each block is drawn by exactly one runtime. While the render host draws this runtime's submissions
+ * ({@link #replayLive()}), a section whose latest submission the host can draw in full ({@link #replayed}) leaves its
+ * blocks out of this runtime's own section meshes; a section that could not be submitted in full stays native, and
+ * the host draws nothing of it. The decision is per section: a change marks only that section for the native renderer
+ * ({@code LevelRenderer.setSectionDirty}, which vanilla and replacements such as Sodium both honour), and nothing
+ * ever falls back as a whole.
  */
 public final class OwnedSectionCompiler {
     private OwnedSectionCompiler() {}
     private static final String PRODUCER="minecraft:sections";
     private static final int MAX_STARTS_PER_TICK=16, MAX_IN_FLIGHT=8;
-    private static final long ACK_FRESH_NANOS=3_000_000_000L, MIN_SWITCH_NANOS=5_000_000_000L;
+    private static final long ACK_FRESH_NANOS=3_000_000_000L, MIN_SWITCH_NANOS=2_000_000_000L;
 
     // Main thread.
     private static final Set<Long> dirty=new LinkedHashSet<>();
-    private static final Set<Long> submitted=new HashSet<>();
+    private static final Set<Long> submitted=new HashSet<>(), failed=new HashSet<>();
     private static Object scene;
     private static long sceneGeneration=-1, lastSwitch;
     private static boolean active;
@@ -48,8 +50,13 @@ public final class OwnedSectionCompiler {
     // Any thread.
     private static final AtomicLong revisions=new AtomicLong();
     private static final AtomicInteger inFlight=new AtomicInteger();
-    private static volatile boolean hideNative;
-    private static volatile long ackGeneration=-1, ackNanos;
+    private static volatile boolean live;
+    /** Sections whose latest submission the host draws in full (compile worker and main thread). */
+    private static final Set<Long> replayed=ConcurrentHashMap.newKeySet();
+    /** Sections whose membership in {@link #replayed} changed; their native meshes follow on the main thread. */
+    private static final Queue<Long> nativeDirty=new ConcurrentLinkedQueue<>();
+    private static long ackGeneration=-1, ackRevision=-1, ackNanos;
+    private static boolean ackCovered;
     // Worker thread.
     private static ExecutorService worker;
     private static volatile Thread workerThread;
@@ -58,14 +65,25 @@ public final class OwnedSectionCompiler {
 
     /** Whether the current thread is this compiler's worker, whose meshes keep this runtime's own blocks. */
     public static boolean ownCompile() { return Thread.currentThread()==workerThread; }
-    /** Native section meshes leave out static blocks while the render host draws the submitted ones. */
-    public static boolean hideNative() { return hideNative; }
+    /** The render host currently draws this runtime's submissions (its scene generation, recently confirmed). */
+    public static boolean replayLive() { return live; }
+    /** Whether a block at {@code pos} is left out of this runtime's own section meshes: the host draws its section. */
+    public static boolean hiddenInSection(net.minecraft.core.BlockPos pos) {
+        return live && Thread.currentThread()!=workerThread && replayed.contains(SectionPos.asLong(pos));
+    }
+    /** Compile worker, {@code GeometryLayer.captured}: a submission of {@code section} was accepted. */
+    static void submissionAccepted(long section,boolean complete) {
+        if(complete ? replayed.add(section) : replayed.remove(section)) nativeDirty.add(section);
+    }
 
     /** The render host confirms it draws this runtime's meshes of {@code generation}. */
-    public static void acknowledged(long generation) { ackGeneration=generation; ackNanos=System.nanoTime(); }
+    public static void acknowledged(long generation,long revision,boolean covered) {
+        if(generation!=sceneGeneration || generation==ackGeneration && revision<ackRevision) return;
+        ackGeneration=generation; ackRevision=revision; ackCovered=covered; ackNanos=System.nanoTime();
+    }
 
     private static boolean wanted(Minecraft mc) {
-        return Experiments.GEOMETRY && mc.level!=null && BridgeCore.session()!=null && BridgeCore.connected() && !GeometryLayer.isRenderHost();
+        return Experiments.GEOMETRY && mc.level!=null && dev.mmlf.bridge.transport.SessionLink.session()!=null && dev.mmlf.bridge.transport.SessionLink.connected() && !GeometryLayer.isRenderHost();
     }
 
     /** Client tick, after {@link GeometryLayer} has settled the scene for this tick. */
@@ -75,11 +93,12 @@ public final class OwnedSectionCompiler {
         if(generation<0) return;
         if(!active || scene!=mc.level || generation!=sceneGeneration) activate(mc,generation);
         updateNativeVisibility(mc,generation);
+        for(Long key;(key=nativeDirty.poll())!=null;) if(live) markNative(mc,key);
         start(mc);
         long now=System.nanoTime();
         if(now-lastStats>10_000_000_000L) {
             lastStats=now;
-            MmlfLog.info("render.submission","owned_sections",Map.of("submitted",submitted.size(),"pending",dirty.size(),"compiled",compiled,"removed",removed,"hideNative",hideNative));
+            MmlfLog.info("render.submission","owned_sections",Map.of("submitted",submitted.size(),"replayed",replayed.size(),"failed",failed.size(),"pending",dirty.size(),"compiled",compiled,"removed",removed,"live",live));
         }
     }
 
@@ -90,8 +109,9 @@ public final class OwnedSectionCompiler {
         }
         boolean newScene=scene!=mc.level;
         scene=mc.level; sceneGeneration=generation; active=true;
-        dirty.clear(); submitted.clear();
-        if(newScene && hideNative) setHidden(mc,false,"scene_changed");
+        dirty.clear(); submitted.clear(); failed.clear(); nativeDirty.clear();
+        if(live) setLive(mc,false,newScene?"scene_changed":"generation_changed");
+        replayed.clear();
         // Chunks already loaded before activation, or kept across a scene reset, produce no load event.
         int radius=mc.options.getEffectiveRenderDistance()+1;
         var center=mc.gameRenderer.getMainCamera().getBlockPosition();
@@ -101,23 +121,31 @@ public final class OwnedSectionCompiler {
     }
 
     private static void deactivate(Minecraft mc) {
-        active=false; scene=null; sceneGeneration=-1; dirty.clear(); submitted.clear();
-        if(hideNative) setHidden(mc,false,"inactive");
+        active=false; scene=null; sceneGeneration=-1; dirty.clear(); submitted.clear(); failed.clear(); nativeDirty.clear();
+        if(live) setLive(mc,false,"inactive");
+        replayed.clear();
     }
 
     private static void updateNativeVisibility(Minecraft mc,long generation) {
         long now=System.nanoTime();
-        boolean confirmed=Experiments.GEOMETRY_REPLAY && ackGeneration==generation && now-ackNanos<ACK_FRESH_NANOS;
-        // Losing confirmation restores the native meshes at once; hiding them again waits, so a flapping link
-        // cannot rebuild every section over and over.
-        if(confirmed==hideNative || confirmed && now-lastSwitch<MIN_SWITCH_NANOS) return;
-        setHidden(mc,confirmed,confirmed?"render_host_confirmed":"confirmation_lost");
+        // Only whether the host draws this scene at all: which sections it draws is known here, per section.
+        boolean confirmed=Experiments.GEOMETRY_REPLAY && ackCovered && ackGeneration==generation && now-ackNanos<ACK_FRESH_NANOS
+            && !dev.mmlf.bridge.world.Worlds.backgroundLeaving();
+        // Losing it brings the replayed sections back at once; taking them out again waits, so a flapping link
+        // cannot rebuild them over and over.
+        if(confirmed==live || confirmed && now-lastSwitch<MIN_SWITCH_NANOS) return;
+        setLive(mc,confirmed,confirmed?"render_host_drawing":"render_host_lost");
     }
-    private static void setHidden(Minecraft mc,boolean hidden,String reason) {
-        hideNative=hidden; lastSwitch=System.nanoTime();
-        MmlfLog.info("render.submission","native_sections",Map.of("hidden",hidden,"reason",reason));
-        // A generic renderer API: vanilla and replacements such as Sodium rebuild their own meshes here.
-        if(mc.level!=null) mc.levelRenderer.allChanged();
+    private static void setLive(Minecraft mc,boolean value,String reason) {
+        live=value; lastSwitch=System.nanoTime();
+        if(!value) DynamicCapture.forgetExported();
+        MmlfLog.info("render.submission","native_sections",Map.of("live",value,"replayed",replayed.size(),"reason",reason));
+        // Only the sections the host draws change; the others keep their native meshes as they are.
+        if(mc.level!=null) for(long key:replayed) markNative(mc,key);
+    }
+    /** A generic renderer API: vanilla and replacements such as Sodium rebuild their own mesh of this section. */
+    private static void markNative(Minecraft mc,long key) {
+        if(mc.level!=null) mc.levelRenderer.setSectionDirty(SectionPos.x(key),SectionPos.y(key),SectionPos.z(key));
     }
 
     // ---- world-data hooks (main thread, from ClientLevelMixin) ----
@@ -156,7 +184,7 @@ public final class OwnedSectionCompiler {
         if(chunk==null) return;
         for(int i=0;i<level.getSectionsCount();i++) {
             int y=level.getSectionYFromSectionIndex(i);
-            if(hasOwned(chunk.getSection(i),x,y,z)) dirty.add(SectionPos.asLong(x,y,z));
+            if(hasOwned(level,chunk.getSection(i),x,y,z)) dirty.add(SectionPos.asLong(x,y,z));
         }
     }
     private static void markSubmittedColumn(ClientLevel level,int x,int z) {
@@ -166,12 +194,12 @@ public final class OwnedSectionCompiler {
         }
     }
 
-    /** Cheap palette test with the same rule as {@link BridgeCore#renderOwned}; false positives only cost a compile. */
-    static boolean hasOwned(LevelChunkSection section,int x,int y,int z) {
+    /** Cheap palette test with the same rule as {@link BridgeEntry#renderOwned}; false positives only cost a compile. */
+    static boolean hasOwned(ClientLevel level,LevelChunkSection section,int x,int y,int z) {
         if(section.hasOnlyAir()) return false;
         if(!RenderOwnership.filterBlocks()) return true;
         if(section.maybeHas(OwnedSectionCompiler::foreign)) return true;
-        for(BlockPos pos:BridgeCore.ownedVanillaPositions())
+        for(BlockPos pos:dev.mmlf.bridge.collab.RenderInputs.ownedVanillaPositions(level))
             if(SectionPos.blockToSectionCoord(pos.getX())==x && SectionPos.blockToSectionCoord(pos.getY())==y && SectionPos.blockToSectionCoord(pos.getZ())==z) return true;
         return false;
     }
@@ -183,6 +211,8 @@ public final class OwnedSectionCompiler {
     }
 
     private static void removeSubmission(long key) {
+        failed.remove(key);
+        if(replayed.remove(key)) nativeDirty.add(key);
         if(!submitted.remove(key)) return;
         if(GeometryLayer.removeVersioned(sceneGeneration,PRODUCER,key,revisions.incrementAndGet())) removed++;
     }
@@ -198,7 +228,7 @@ public final class OwnedSectionCompiler {
             int x=SectionPos.x(key),y=SectionPos.y(key),z=SectionPos.z(key);
             int index=level.getSectionIndexFromSectionY(y);
             LevelChunk chunk=index<0 || index>=level.getSectionsCount() ? null : level.getChunkSource().getChunk(x,z,ChunkStatus.FULL,false);
-            if(chunk==null || !hasOwned(chunk.getSection(index),x,y,z)) { removeSubmission(key); continue; }
+            if(chunk==null || !hasOwned(level,chunk.getSection(index),x,y,z)) { removeSubmission(key); continue; }
             SectionPos section=SectionPos.of(x,y,z);
             RenderChunkRegion region=cache.createRegion(level,section);
             if(region==null) { removeSubmission(key); continue; }
@@ -212,13 +242,27 @@ public final class OwnedSectionCompiler {
                     try {
                         if(pack==null) pack=new SectionBufferBuilderPack();
                         var results=compiler.compile(section,region,sorting,pack);
-                        try { GeometryLayer.captured(source,generation,section,revision,results.renderedLayers); }
+                        try {
+                            GeometryLayer.captured(source,generation,section,revision,results.renderedLayers);
+                            mc.execute(()->{ if(scene==source && sceneGeneration==generation) failed.remove(key); });
+                        }
                         finally { results.release(); }
                     } catch(RuntimeException | LinkageError e) {
                         MmlfLog.sampled("render.submission","owned_compile_failed",5000,Map.of("section",section.toString(),"exception",e.toString()));
+                        mc.execute(()->{
+                            if(scene==source && sceneGeneration==generation) {
+                                failed.add(key);
+                                if(replayed.remove(key)) nativeDirty.add(key);
+                                dirty.add(key);
+                            }
+                        });
                     } finally { inFlight.decrementAndGet(); }
                 });
-            } catch(RejectedExecutionException e) { inFlight.decrementAndGet(); }
+            } catch(RejectedExecutionException e) {
+                inFlight.decrementAndGet();
+                failed.add(key);
+                mc.execute(()->{ if(scene==source && sceneGeneration==generation) dirty.add(key); });
+            }
         }
     }
 }

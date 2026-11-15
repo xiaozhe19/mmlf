@@ -20,6 +20,6 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 public abstract class ItemRendererMixin {
     @Inject(method="render",at=@At("HEAD"),cancellable=true)
     private void mmlf$proxy(ItemStack stack,ItemDisplayContext context,boolean leftHand,PoseStack pose,MultiBufferSource buffers,int light,int overlay,BakedModel model,CallbackInfo ci) {
-        if(dev.mmlf.bridge.ProxyItems.drawnByOwner(stack,context,leftHand,pose,buffers,light,overlay)) ci.cancel();
+        if(dev.mmlf.bridge.render.ProxyItems.drawnByOwner(stack,context,leftHand,pose,buffers,light,overlay)) ci.cancel();
     }
 }

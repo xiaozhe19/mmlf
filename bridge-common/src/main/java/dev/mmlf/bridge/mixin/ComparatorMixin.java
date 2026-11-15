@@ -1,6 +1,6 @@
 package dev.mmlf.bridge.mixin;
 
-import dev.mmlf.bridge.RedstoneBridge;
+import dev.mmlf.bridge.collab.RedstoneBridge;
 import net.minecraft.core.BlockPos;
 import net.minecraft.world.level.Level;
 import net.minecraft.world.level.block.ComparatorBlock;

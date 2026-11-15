@@ -1,6 +1,6 @@
 package dev.mmlf.bridge.mixin;
 
-import dev.mmlf.bridge.WorldClock;
+import dev.mmlf.bridge.collab.WorldClock;
 import net.minecraft.server.level.ServerLevel;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.injection.At;

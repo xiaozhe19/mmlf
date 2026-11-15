@@ -1,5 +1,4 @@
 package dev.mmlf.bridge.mixin;
-import dev.mmlf.bridge.BridgeCore;
 import net.minecraft.client.renderer.LevelRenderer;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.injection.At;
@@ -9,5 +8,5 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 @Mixin(LevelRenderer.class)
 public abstract class HitOutlineMixin {
  @Inject(method="renderHitOutline",at=@At("HEAD"),cancellable=true)
- private void mmlf$noBackgroundOutline(CallbackInfo ci) { if(BridgeCore.connected() && !BridgeCore.isPrimary()) ci.cancel(); }
+ private void mmlf$noBackgroundOutline(CallbackInfo ci) { if(dev.mmlf.bridge.transport.SessionLink.connected() && !dev.mmlf.bridge.transport.SessionLink.isPrimary()) ci.cancel(); }
 }

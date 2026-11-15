@@ -1,6 +1,6 @@
 package dev.mmlf.bridge.mixin;
 
-import dev.mmlf.bridge.InventoryBridge;
+import dev.mmlf.bridge.collab.InventoryBridge;
 import net.minecraft.world.inventory.CartographyTableMenu;
 import net.minecraft.world.inventory.ResultContainer;
 import net.minecraft.world.item.ItemStack;

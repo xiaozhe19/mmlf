@@ -1,6 +1,5 @@
 package dev.mmlf.bridge.render;
 
-import dev.mmlf.bridge.BridgeCore;
 import dev.mmlf.common.RenderInstanceStore;
 
 /** Optional transport-only probe; it does not submit drawable geometry. */

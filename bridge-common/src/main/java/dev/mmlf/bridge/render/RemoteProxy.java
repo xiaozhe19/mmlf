@@ -19,7 +19,7 @@ import net.minecraft.world.entity.Marker;
  * pass, a shader pack's shadow pass, outline passes), with that pass's own transforms and frustum. It never reaches
  * a server: markers have no network representation, and this one exists only in the client level.
  */
-public final class RemoteProxy extends Marker {
+public final class RemoteProxy extends Marker implements dev.mmlf.bridge.platform.LocalOnlyEntity {
     private static final int ID=-0x4d4d4c46;
     private RemoteProxy(ClientLevel level) { super(EntityType.MARKER,level); setId(ID); }
 

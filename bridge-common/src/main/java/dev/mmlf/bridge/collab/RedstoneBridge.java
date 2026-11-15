@@ -1,0 +1,184 @@
+package dev.mmlf.bridge.collab;
+
+import dev.mmlf.bridge.transport.SessionLink;
+import dev.mmlf.bridge.world.Worlds;
+
+import dev.mmlf.common.*;
+import dev.mmlf.common.Messages.*;
+import net.minecraft.core.BlockPos;
+import net.minecraft.core.Direction;
+import net.minecraft.resources.ResourceKey;
+import net.minecraft.resources.ResourceLocation;
+import net.minecraft.server.MinecraftServer;
+import net.minecraft.server.level.ServerLevel;
+import net.minecraft.world.level.Level;
+import net.minecraft.world.level.block.Blocks;
+import net.minecraft.world.level.block.state.BlockState;
+import java.util.*;
+
+/**
+ * Redstone between mod blocks of different runtimes. Vanilla redstone runs natively, all of it in the primary's world;
+ * another runtime's mod block is a signal endpoint there:
+ * <ul>
+ * <li>its inputs: each runtime measures natively what its own world gives the positions next to other runtimes'
+ * objects (a lever, a wire, a powered block beside them) and publishes it;</li>
+ * <li>its outputs: each runtime measures what its own signal-emitting or comparator-readable objects give out and
+ * publishes it.</li>
+ * </ul>
+ * A receiving runtime answers Minecraft's own signal queries at those positions with the published values
+ * ({@code BlockStateSignalMixin}, {@code ComparatorMixin}) and lets native logic react through ordinary neighbour
+ * updates. An object's output is the block's own signal, never power conducted through it: a vanilla wire pointing into a
+ * remote solid block would otherwise get its own power back and never switch off. Signals take effect up to one tick
+ * later than within one runtime, depending on how the two runtimes' ticks fall.
+ *
+ * Server thread only, except {@link #receive}, which hands over to it.
+ */
+public final class RedstoneBridge {
+    private RedstoneBridge() {}
+    /** This world's part of RedstoneBridge: made when the world first needs it, gone when it closes ({@link Worlds}). */
+    private static final class State implements dev.mmlf.common.WorldSession.Scoped {
+        final SignalTable.Outbox outbox=new SignalTable.Outbox();
+        final SignalTable.Inbox inbox=new SignalTable.Inbox();
+        volatile boolean any;
+    }
+    private static final dev.mmlf.common.WorldSession.Key<State> STATE=new dev.mmlf.common.WorldSession.Key<>("redstone",State::new);
+    /** The open world's state; with none open, a throwaway one: what is written to it reaches no world. */
+    private static State state() { var world=Worlds.current(); return world==null ? new State() : world.get(STATE); }
+
+    private static final Direction[] DIRECTIONS=Direction.values();
+    private static long metricSince, metricChanges;
+
+    /** {@code BlockStateSignalMixin}: what other runtimes give a neighbour of this position; 0 when nothing is published. */
+    public static int remoteSignal(Level level,BlockPos pos,Direction direction,boolean strong) {
+        if(!state().any || level.isClientSide()) return 0;
+        return state().inbox.signal(level.dimension().location().toString(),pos.getX(),pos.getY(),pos.getZ(),direction.ordinal(),strong);
+    }
+    /** {@code ComparatorMixin}: what a comparator reads from another runtime's object at this position, or -1. */
+    public static int remoteAnalog(Level level,BlockPos pos) {
+        if(!state().any || level.isClientSide()) return -1;
+        return state().inbox.analog(level.dimension().location().toString(),pos.getX(),pos.getY(),pos.getZ());
+    }
+
+    /** Server thread, every tick: indexes what changed, then publishes this runtime's boundary signals and neighbours. */
+    static void tick(MinecraftServer server) {
+        Boundary.tick(server);
+        ChunkFollow.tick(server);
+        SharedWorld.serverTick(server);
+        ContainerBridge.tick(server);
+        List<SignalState> boundary=new ArrayList<>();
+        Set<Boundary.At> seen=new HashSet<>();
+        for(ObjectState own:Boundary.localObjects()) {
+            ServerLevel level=level(server,own.dimension()); if(level==null) continue;
+            BlockPos pos=new BlockPos(own.x(),own.y(),own.z());
+            if(!level.isLoaded(pos)) continue;
+            BlockState state=level.getBlockState(pos);
+            if((state.isSignalSource() || state.hasAnalogOutputSignal()) && seen.add(new Boundary.At(own.dimension(),pos))) boundary.add(output(level,own.dimension(),pos,state));
+        }
+        List<Boundary.At> neighbours=new ArrayList<>();
+        for(ObjectState other:Boundary.remoteObjects()) {
+            ServerLevel level=level(server,other.dimension()); if(level==null) continue;
+            neighbours(level,other.dimension(),new BlockPos(other.x(),other.y(),other.z()),seen,neighbours,boundary);
+        }
+        // Other runtimes' plain blocks something is happening next to (primary only: it holds their stand-ins).
+        if(SessionLink.isPrimary()) for(Boundary.At endpoint:PlainEndpoints.active(server)) {
+            if(Boundary.remoteAt(endpoint.dimension(),endpoint.pos())) continue;
+            ServerLevel level=level(server,endpoint.dimension()); if(level==null) continue;
+            if(neighbours(level,endpoint.dimension(),endpoint.pos(),seen,neighbours,boundary)) PlainEndpoints.keep(endpoint);
+        }
+        if(SessionLink.isPrimary()) NeighborMirror.tick(server,neighbours);
+        List<SignalState> changes=state().outbox.diff(boundary);
+        if(changes.isEmpty()) return;
+        metricChanges+=changes.size();
+        // One batch per tick, kept in order and delivered once: a lost change would leave a lamp lit for good.
+        SessionLink.sendReliable("signals","*",new Signals(changes));
+        MmlfLog.debug("redstone","published",Map.of("changes",changes.size(),"first",changes.get(0).location()));
+        long now=System.nanoTime();
+        if(metricSince==0) metricSince=now;
+        if(now-metricSince>=10_000_000_000L) { MmlfLog.info("metrics","redstone",Map.of("changesPerSecond",metricChanges/((now-metricSince)/1e9),"boundary",boundary.size(),"published",state().outbox.size(),"plainEndpoints",PlainEndpoints.metrics())); metricChanges=0; metricSince=now; }
+    }
+    /**
+     * The positions next to another runtime's block at {@code at}, with what this world gives each of them. Positions
+     * holding another runtime's block themselves (an object, or a stand-in) are left out: their owner measures its own
+     * world there. Returns whether any of them gives a signal now.
+     */
+    private static boolean neighbours(ServerLevel level,String dimension,BlockPos at,Set<Boundary.At> seen,List<Boundary.At> neighbours,List<SignalState> boundary) {
+        boolean signal=false;
+        for(Direction d:DIRECTIONS) {
+            BlockPos pos=at.relative(d); Boundary.At key=new Boundary.At(dimension,pos);
+            if(Boundary.remoteAt(dimension,pos) || !level.isLoaded(pos)) continue;
+            if(SessionLink.isPrimary() && StandInBlock.is(level.getBlockState(pos))) continue;
+            SignalState input=input(level,dimension,pos);
+            for(int i=0;i<6 && !signal;i++) signal=input.weak()[i]>0 || input.strong()[i]>0;
+            if(!seen.add(key)) continue;
+            neighbours.add(key);
+            boundary.add(input);
+        }
+        return signal;
+    }
+    /** What this runtime's object gives out by itself. */
+    private static SignalState output(ServerLevel level,String dimension,BlockPos pos,BlockState state) {
+        int[] weak=new int[6], strong=new int[6];
+        for(Direction d:DIRECTIONS) { weak[d.ordinal()]=state.getSignal(level,pos,d); strong[d.ordinal()]=state.getDirectSignal(level,pos,d); }
+        int analog=state.hasAnalogOutputSignal() ? state.getAnalogOutputSignal(level,pos) : -1;
+        return new SignalState(dimension,pos.getX(),pos.getY(),pos.getZ(),weak,strong,analog);
+    }
+    /** What this runtime's world gives another runtime's object from a position next to it, measured natively. */
+    private static SignalState input(ServerLevel level,String dimension,BlockPos pos) {
+        int[] weak=new int[6], strong=new int[6];
+        for(Direction d:DIRECTIONS) { weak[d.ordinal()]=level.getSignal(pos,d); strong[d.ordinal()]=level.getDirectSignal(pos,d); }
+        return new SignalState(dimension,pos.getX(),pos.getY(),pos.getZ(),weak,strong,-1);
+    }
+
+    /** Network thread: another runtime's boundary changed. */
+    public static void receive(String source,Signals signals) {
+        var server=net.minecraft.client.Minecraft.getInstance().getSingleplayerServer();
+        if(server==null || signals==null || signals.changes()==null) return;
+        server.execute(()->{
+            List<SignalState> changed=new ArrayList<>();
+            for(SignalState change:signals.changes()) if(state().inbox.apply(source,change)) changed.add(change);
+            state().any=!state().inbox.isEmpty();
+            notifyNeighbours(server,changed);
+            if(!changed.isEmpty()) MmlfLog.debug("redstone","received",Map.of("source",source,"changes",changed.size(),"first",changed.get(0).location()));
+        });
+    }
+    /** A runtime left: its signals stop, and what they powered here reacts. */
+    public static void runtimeLeft(String runtime) {
+        var server=net.minecraft.client.Minecraft.getInstance().getSingleplayerServer(); if(server==null) return;
+        server.execute(()->{ var gone=state().inbox.forget(runtime); state().any=!state().inbox.isEmpty(); notifyNeighbours(server,gone); state().outbox.reset(); });
+        NeighborMirror.clear(runtime);
+        ChunkFollow.forget(runtime); ChunkFollow.reset();
+    }
+    /** A runtime (re)joined and knows nothing of this boundary: it is published in full on the next tick. */
+    public static void runtimeJoined() {
+        var server=net.minecraft.client.Minecraft.getInstance().getSingleplayerServer(); if(server==null) return;
+        server.execute(state().outbox::reset);
+        NeighborMirror.runtimeJoined();
+        ChunkFollow.reset();
+    }
+    public static void disconnected() {
+        var server=net.minecraft.client.Minecraft.getInstance().getSingleplayerServer(); if(server==null) return;
+        server.execute(()->{ var gone=state().inbox.forgetAll(); state().any=false; notifyNeighbours(server,gone); state().outbox.reset(); PlainEndpoints.clear(); });
+        NeighborMirror.clear(null);
+        ChunkFollow.reset();
+    }
+
+    /**
+     * Lets native logic react: the neighbours of a changed position are told it changed, and so are theirs, since a
+     * strongly powered block passes power on to its own neighbours, as a lever's attached block does.
+     */
+    private static void notifyNeighbours(MinecraftServer server,List<SignalState> changed) {
+        for(SignalState s:changed) {
+            ServerLevel level=level(server,s.dimension()); if(level==null) continue;
+            BlockPos pos=new BlockPos(s.x(),s.y(),s.z());
+            if(!level.isLoaded(pos)) continue;
+            level.updateNeighborsAt(pos,Blocks.AIR);
+            for(Direction d:DIRECTIONS) level.updateNeighborsAt(pos.relative(d),Blocks.AIR);
+        }
+    }
+    /** {@link #level} for other packages. */
+    public static ServerLevel levelOf(MinecraftServer server,String dimension) { return level(server,dimension); }
+    static ServerLevel level(MinecraftServer server,String dimension) {
+        var location=ResourceLocation.tryParse(dimension);
+        return location==null ? null : server.getLevel(ResourceKey.create(net.minecraft.core.registries.Registries.DIMENSION,location));
+    }
+}

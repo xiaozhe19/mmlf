@@ -34,6 +34,6 @@ public abstract class EntityRenderDispatcherMixin {
     }
     @Inject(method="shouldRender",at=@At("HEAD"),cancellable=true)
     private <E extends Entity> void mmlf$hidden(E entity,Frustum frustum,double x,double y,double z,CallbackInfoReturnable<Boolean> cir) {
-        if(NativeWorld.hidden()) cir.setReturnValue(false);
+        if(NativeWorld.hides(entity)) cir.setReturnValue(false);
     }
 }

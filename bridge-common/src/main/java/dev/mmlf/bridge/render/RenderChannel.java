@@ -1,6 +1,5 @@
 package dev.mmlf.bridge.render;
 
-import dev.mmlf.bridge.BridgeCore;
 import dev.mmlf.common.InJvm;
 import java.io.IOException;
 import java.nio.file.*;
@@ -21,17 +20,17 @@ public final class RenderChannel {
         public void reset() { seen=null; modified=null; size=-1; }
     }
 
-    private static boolean memory() { return BridgeCore.session().inJvm(); }
-    private static String key(String runtime,String name) { return "render:"+BridgeCore.session().identity()+":"+runtime+":"+name; }
+    private static boolean memory() { return dev.mmlf.bridge.transport.SessionLink.session().inJvm(); }
+    private static String key(String runtime,String name) { return "render:"+dev.mmlf.bridge.transport.SessionLink.session().identity()+":"+runtime+":"+name; }
     @SuppressWarnings("unchecked")
     private static AtomicReference<byte[]> slot(String runtime,String name) {
         return (AtomicReference<byte[]>)InJvm.registry().computeIfAbsent(key(runtime,name),k->new AtomicReference<byte[]>());
     }
-    private static Path file(String runtime,String name) { return BridgeCore.session().root().resolve(runtime+"."+name.replace('/','-')); }
+    private static Path file(String runtime,String name) { return dev.mmlf.bridge.transport.SessionLink.session().root().resolve(runtime+"."+name.replace('/','-')); }
 
     /** This runtime's value of {@code name}; replaces the previous one. */
     public static void publish(String name,byte[] data) throws IOException {
-        String runtime=BridgeCore.runtimeId();
+        String runtime=dev.mmlf.bridge.transport.SessionLink.runtimeId();
         if(memory()) { slot(runtime,name).set(data); return; }
         Path target=file(runtime,name),temp=target.resolveSibling(target.getFileName()+".tmp");
         Files.write(temp,data);
@@ -59,7 +58,7 @@ public final class RenderChannel {
     // ---- ordered channels (one JVM only): every value in order, for changes that build on the previous ones ----
 
     /** Whether ordered channels are available: runtimes in one JVM. */
-    public static boolean ordered() { return BridgeCore.session()!=null && memory(); }
+    public static boolean ordered() { return dev.mmlf.bridge.transport.SessionLink.session()!=null && memory(); }
     @SuppressWarnings("unchecked")
     private static java.util.concurrent.ConcurrentLinkedQueue<byte[]> queue(String runtime,String name) {
         return (java.util.concurrent.ConcurrentLinkedQueue<byte[]>)InJvm.registry().computeIfAbsent(key(runtime,name+"#queue"),k->new java.util.concurrent.ConcurrentLinkedQueue<byte[]>());
@@ -70,12 +69,12 @@ public final class RenderChannel {
     }
     /** This runtime appends a value to {@code name}; false when the reader fell this far behind (the writer then starts over). */
     public static boolean append(String name,byte[] data,int limit) {
-        var queue=queue(BridgeCore.runtimeId(),name);
+        var queue=queue(dev.mmlf.bridge.transport.SessionLink.runtimeId(),name);
         if(queue.size()>=limit) { queue.clear(); return false; }
         queue.add(data); return true;
     }
     /** This runtime: whether the reader asked for {@code name} from the start (whole state, nothing before it matters); clears the request. */
-    public static boolean restartRequested(String name) { return restart(BridgeCore.runtimeId(),name).getAndSet(false); }
+    public static boolean restartRequested(String name) { return restart(dev.mmlf.bridge.transport.SessionLink.runtimeId(),name).getAndSet(false); }
     /** Reader: drops what is queued and asks {@code runtime} to start {@code name} over with its whole state. */
     public static void requestRestart(String runtime,String name) { queue(runtime,name).clear(); restart(runtime,name).set(true); }
     /** Reader: {@code runtime}'s values of {@code name} in order, each once. */

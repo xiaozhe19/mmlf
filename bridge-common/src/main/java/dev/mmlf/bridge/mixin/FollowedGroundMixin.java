@@ -1,5 +1,4 @@
 package dev.mmlf.bridge.mixin;
-import dev.mmlf.bridge.BridgeCore;
 import net.minecraft.world.entity.Entity;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.injection.At;
@@ -9,5 +8,5 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
 @Mixin(Entity.class)
 public abstract class FollowedGroundMixin {
  @Inject(method="onGround",at=@At("HEAD"),cancellable=true)
- private void mmlf$followed(CallbackInfoReturnable<Boolean> ci) { Boolean grounded=BridgeCore.followedGround((Entity)(Object)this); if(grounded!=null) ci.setReturnValue(grounded); }
+ private void mmlf$followed(CallbackInfoReturnable<Boolean> ci) { Boolean grounded=dev.mmlf.bridge.collab.PlayerFollower.followedGround((Entity)(Object)this); if(grounded!=null) ci.setReturnValue(grounded); }
 }

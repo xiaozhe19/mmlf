@@ -1,7 +1,7 @@
 package dev.mmlf.bridge.mixin;
 
-import dev.mmlf.bridge.CoGeneration;
-import dev.mmlf.bridge.SharedWorld;
+import dev.mmlf.bridge.collab.CoGeneration;
+import dev.mmlf.bridge.collab.SharedWorld;
 import java.util.concurrent.CompletableFuture;
 import net.minecraft.server.level.GenerationChunkHolder;
 import net.minecraft.util.StaticCache2D;

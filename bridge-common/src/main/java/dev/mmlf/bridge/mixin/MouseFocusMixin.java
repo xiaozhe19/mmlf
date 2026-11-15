@@ -1,5 +1,5 @@
 package dev.mmlf.bridge.mixin;
-import dev.mmlf.bridge.GuiHost;
+import dev.mmlf.bridge.collab.GuiHost;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.MouseHandler;
 import org.spongepowered.asm.mixin.Mixin;

@@ -1,6 +1,6 @@
 package dev.mmlf.bridge.mixin;
-import dev.mmlf.bridge.ChunkFollow;
-import dev.mmlf.bridge.CoGeneration;
+import dev.mmlf.bridge.collab.ChunkFollow;
+import dev.mmlf.bridge.collab.CoGeneration;
 import net.minecraft.server.level.ChunkMap;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;

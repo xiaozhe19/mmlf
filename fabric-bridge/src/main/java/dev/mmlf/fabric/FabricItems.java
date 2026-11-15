@@ -1,6 +1,6 @@
 package dev.mmlf.fabric;
 
-import dev.mmlf.bridge.ItemAccess;
+import dev.mmlf.bridge.platform.ItemAccess;
 import net.fabricmc.fabric.api.transfer.v1.item.ItemStorage;
 import net.fabricmc.fabric.api.transfer.v1.item.ItemVariant;
 import net.fabricmc.fabric.api.transfer.v1.storage.Storage;

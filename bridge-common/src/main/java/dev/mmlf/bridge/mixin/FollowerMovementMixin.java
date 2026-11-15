@@ -1,6 +1,5 @@
 package dev.mmlf.bridge.mixin;
 
-import dev.mmlf.bridge.BridgeCore;
 import net.minecraft.server.network.ServerGamePacketListenerImpl;
 import net.minecraft.world.level.LevelReader;
 import net.minecraft.world.phys.AABB;
@@ -19,6 +18,6 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
 public abstract class FollowerMovementMixin {
     @Inject(method="isPlayerCollidingWithAnythingNew",at=@At("HEAD"),cancellable=true)
     private void mmlf$follower(LevelReader level,AABB box,double x,double y,double z,CallbackInfoReturnable<Boolean> cir) {
-        if(BridgeCore.followsPrimary()) cir.setReturnValue(false);
+        if(dev.mmlf.bridge.collab.PlayerFollower.followsPrimary()) cir.setReturnValue(false);
     }
 }

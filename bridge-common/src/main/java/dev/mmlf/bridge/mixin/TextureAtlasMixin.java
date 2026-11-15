@@ -12,7 +12,7 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 public abstract class TextureAtlasMixin {
     @Inject(method="upload",at=@At("TAIL"))
     private void mmlf$atlasReloaded(SpriteLoader.Preparations preparations,CallbackInfo ci) {
-        if(dev.mmlf.bridge.Experiments.GEOMETRY && ((TextureAtlas)(Object)this).location().equals(TextureAtlas.LOCATION_BLOCKS))
+        if(dev.mmlf.bridge.platform.Experiments.GEOMETRY && ((TextureAtlas)(Object)this).location().equals(TextureAtlas.LOCATION_BLOCKS))
             dev.mmlf.bridge.render.GeometryLayer.invalidateAssets();
     }
 }

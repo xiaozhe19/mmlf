@@ -1,7 +1,8 @@
 package dev.mmlf.bridge.mixin;
 
-import dev.mmlf.bridge.CoGeneration;
-import dev.mmlf.bridge.SaveSync;
+import dev.mmlf.bridge.collab.CoGeneration;
+import dev.mmlf.bridge.collab.ContainerBridge;
+import dev.mmlf.bridge.collab.SaveSync;
 import net.minecraft.server.MinecraftServer;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.injection.At;
@@ -20,8 +21,9 @@ public abstract class ServerSaveMixin {
     }
     @Inject(method="saveEverything",at=@At("RETURN"))
     private void mmlf$afterSave(boolean suppressLog,boolean flush,boolean force,CallbackInfoReturnable<Boolean> cir) {
-        CoGeneration.primarySaved((MinecraftServer)(Object)this);
-        SaveSync.primaryAfter((MinecraftServer)(Object)this,flush);
+        MinecraftServer server=(MinecraftServer)(Object)this;
+        if(!SaveSync.backgroundSkips(server) && dev.mmlf.bridge.transport.SessionLink.isPrimary())
+            SaveSync.primaryAfter(server,flush,CoGeneration.primarySaved(server) & ContainerBridge.save(server));
     }
     @Inject(method="saveAllChunks",at=@At("HEAD"),cancellable=true)
     private void mmlf$chunks(boolean suppressLog,boolean flush,boolean force,CallbackInfoReturnable<Boolean> cir) {
@@ -34,7 +36,8 @@ public abstract class ServerSaveMixin {
     }
     @Inject(method="stopServer",at=@At(value="INVOKE",target="Lnet/minecraft/server/MinecraftServer;saveAllChunks(ZZZ)Z",shift=At.Shift.AFTER))
     private void mmlf$afterStop(CallbackInfo ci) {
-        CoGeneration.primarySaved((MinecraftServer)(Object)this);
-        SaveSync.primaryAfter((MinecraftServer)(Object)this,true);
+        MinecraftServer server=(MinecraftServer)(Object)this;
+        boolean transfersSaved=ContainerBridge.save(server);
+        SaveSync.primaryAfter(server,true,CoGeneration.primarySaved(server) & transfersSaved);
     }
 }

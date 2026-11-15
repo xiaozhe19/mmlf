@@ -1,9 +1,9 @@
 package dev.mmlf.bridge.render;
+import dev.mmlf.bridge.transport.PoseChannel;
 
 import com.mojang.blaze3d.systems.RenderSystem;
 import com.mojang.blaze3d.vertex.*;
-import dev.mmlf.bridge.BridgeCore;
-import dev.mmlf.bridge.Experiments;
+import dev.mmlf.bridge.platform.Experiments;
 import dev.mmlf.common.MmlfLog;
 import dev.mmlf.common.RenderDynamicCodec;
 import dev.mmlf.common.RenderTextureCodec;
@@ -61,7 +61,7 @@ public final class DynamicCapture {
      */
     private static boolean ownedParticle(net.minecraft.client.particle.Particle particle) {
         return particle instanceof net.minecraft.client.particle.TerrainParticle || !particle.getClass().getName().startsWith("net.minecraft.")
-            || dev.mmlf.bridge.RemoteEntities.entityParticle(particle);
+            || dev.mmlf.bridge.collab.RenderInputs.entityParticle(particle);
     }
     private static void recordParticles(Minecraft mc,Camera camera,float partial) {
         var all=((dev.mmlf.bridge.mixin.ParticleEngineAccessor)mc.particleEngine).mmlf$particles();
@@ -88,10 +88,35 @@ public final class DynamicCapture {
         FORMATS.put("POSITION_TEX_LIGHTMAP_COLOR",DefaultVertexFormat.POSITION_TEX_LIGHTMAP_COLOR); FORMATS.put("POSITION_TEX_COLOR_NORMAL",DefaultVertexFormat.POSITION_TEX_COLOR_NORMAL);
     }
 
+    /**
+     * Vertex formats the render host replays, whatever the render type's name ({@code GeometryLayer.dynamicType}
+     * falls back to a type of the same format). The same table on both sides: what this runtime submits in these
+     * formats is drawn by the host, so it is left out of this runtime's own frame.
+     */
+    public static final Set<VertexFormat> REPLAYABLE=Set.of(DefaultVertexFormat.BLOCK,DefaultVertexFormat.NEW_ENTITY,DefaultVertexFormat.PARTICLE,
+        DefaultVertexFormat.POSITION,DefaultVertexFormat.POSITION_COLOR,DefaultVertexFormat.POSITION_COLOR_NORMAL,DefaultVertexFormat.POSITION_COLOR_LIGHTMAP,
+        DefaultVertexFormat.POSITION_TEX,DefaultVertexFormat.POSITION_TEX_COLOR,DefaultVertexFormat.POSITION_COLOR_TEX_LIGHTMAP);
     private static boolean capturing;
+    /** Set while recording one object when it drew something the host cannot replay; that object stays native. */
+    private static boolean objectIncomplete;
     private static final Map<RenderType,ByteBufferBuilder> pool=new HashMap<>();
     private static final Map<RenderType,BufferBuilder> active=new LinkedHashMap<>();
-    private static final MultiBufferSource source=type->active.computeIfAbsent(type,t->new BufferBuilder(pool.computeIfAbsent(t,k->new ByteBufferBuilder(4096)),t.mode(),t.format()));
+    private static final MultiBufferSource source=type->{
+        if(!REPLAYABLE.contains(type.format())) objectIncomplete=true;
+        return active.computeIfAbsent(type,t->new BufferBuilder(pool.computeIfAbsent(t,k->new ByteBufferBuilder(4096)),t.mode(),t.format()));
+    };
+    /**
+     * The objects of the last capture the render host draws in full, by entity id and block-entity position. Their
+     * owner leaves exactly these out of its own frame ({@code EntityRenderDispatcherMixin},
+     * {@code BlockEntityRenderDispatcherMixin}): one that failed to record, or drew something the host cannot replay,
+     * stays in it, and nothing is drawn twice.
+     */
+    private static volatile Set<Integer> exportedEntities=Set.of();
+    private static volatile Set<Long> exportedBlockEntities=Set.of();
+    public static boolean exported(Entity entity) { return exportedEntities.contains(entity.getId()); }
+    public static boolean exported(BlockEntity blockEntity) { return exportedBlockEntities.contains(blockEntity.getBlockPos().asLong()); }
+    /** Nothing of this runtime is drawn by the host any more (its world left, or the host stopped drawing it). */
+    public static void forgetExported() { exportedEntities=Set.of(); exportedBlockEntities=Set.of(); }
     private static final Map<RenderType,String> textureOf=new HashMap<>();
     private static final Map<Integer,String> textureNames=new HashMap<>();
     private static final Map<String,Long> publishedTextures=new HashMap<>();
@@ -102,38 +127,29 @@ public final class DynamicCapture {
     /** True while this class drives the dispatchers; this runtime's own world pass is not affected by hiding then. */
     public static boolean capturing() { return capturing; }
 
-    /** The owner rule for dynamic content, the same namespace rule as for blocks. Players belong to their own runtime. */
-    public static boolean owned(Entity entity) {
-        if(entity instanceof RemoteProxy || entity instanceof Player) return false;
-        if(dev.mmlf.bridge.RemoteEntities.claimed(entity.getUUID())) return true;
-        // Claimed before the world was saved: its server copy carries the tag (the client copy learns it from the set).
-        if(!entity.level().isClientSide() && entity.getTags().contains(dev.mmlf.bridge.RemoteEntities.OWNED_TAG)) { dev.mmlf.bridge.RemoteEntities.claim(entity.getUUID()); return true; }
-        if(!BuiltInRegistries.ENTITY_TYPE.getKey(entity.getType()).getNamespace().equals("minecraft")) return true;
-        // Vanilla carriers of this runtime's content.
-        if(entity instanceof ItemEntity item) return foreign(BuiltInRegistries.ITEM.getKey(item.getItem().getItem()).getNamespace());
-        if(entity instanceof ItemFrame frame) return foreign(BuiltInRegistries.ITEM.getKey(frame.getItem().getItem()).getNamespace());
-        if(entity instanceof FallingBlockEntity falling) return BridgeCore.renderOwned(falling.getBlockState(),falling.blockPosition());
-        return false;
-    }
-    static boolean owned(BlockEntity blockEntity) { return BridgeCore.renderOwned(blockEntity.getBlockState(),blockEntity.getBlockPos()); }
+    /** The owner rule for dynamic content ({@code RemoteEntities.owned}). */
+    public static boolean owned(Entity entity) { return dev.mmlf.bridge.collab.RenderInputs.ownsEntity(entity); }
+    static boolean owned(BlockEntity blockEntity) { return dev.mmlf.bridge.collab.RenderInputs.blockOwned(blockEntity.getLevel(),blockEntity.getBlockState(),blockEntity.getBlockPos()); }
     private static boolean foreign(String namespace) { return !namespace.equals("minecraft"); }
 
     /** Render thread, before each frame of the submitter ({@code MinecraftMixin}), whether or not it renders its world. */
     public static void frame(Minecraft mc,DeltaTracker delta) {
-        if(!Experiments.GEOMETRY_REPLAY || mc.level==null || BridgeCore.session()==null || !BridgeCore.connected() || GeometryLayer.isRenderHost()) return;
+        if(!Experiments.GEOMETRY_REPLAY || mc.level==null || dev.mmlf.bridge.transport.SessionLink.session()==null || !dev.mmlf.bridge.transport.SessionLink.connected() || GeometryLayer.isRenderHost()) return;
+        // The primary is leaving its world: nothing of this one is shown there any more.
+        if(dev.mmlf.bridge.world.Worlds.backgroundLeaving()) { forgetExported(); return; }
         long scene=GeometryLayer.sceneGeneration(); if(scene<0) return;
         if(scene!=generation) { generation=scene; publishedTextures.clear(); textureNames.clear(); }
         GeometryLayer.submitterFrame(mc);
         long now=System.nanoTime();
-        if(!BridgeCore.session().inJvm() && now-lastPublish<FILE_INTERVAL_NANOS) return;
+        if(!dev.mmlf.bridge.transport.SessionLink.session().inJvm() && now-lastPublish<FILE_INTERVAL_NANOS) return;
         lastPublish=now;
         float partial=delta.getGameTimeDeltaPartialTick(false);
         Camera camera=mc.gameRenderer.getMainCamera();
         Entity viewer=mc.getCameraEntity()!=null?mc.getCameraEntity():mc.player;
         // Without its own world pass this runtime no longer sets up the camera (which follows the primary's pose).
         // The camera is set up from the newest primary pose here, so the capture follows the same pose it reports.
-        BridgeCore.pollSharedPose();
-        long cameraSequence=BridgeCore.receivedPoseSequence();
+        dev.mmlf.bridge.render.CameraPublisher.pollSharedPose();
+        long cameraSequence=PoseChannel.receivedSequence();
         if(viewer!=null) camera.setup(mc.level,viewer,false,false,partial);
         if(!camera.isInitialized()) return;
         var cam=camera.getPosition();
@@ -142,12 +158,14 @@ public final class DynamicCapture {
         var pose=new PoseStack();
         int distance=mc.options.getEffectiveRenderDistance(); double maxSq=Math.pow((distance+1)*16.0,2);
         int objects=0;
+        var entityIds=new HashSet<Integer>(); var blockEntityPositions=new HashSet<Long>();
         capturing=true; active.clear();
         try {
             for(Entity entity:mc.level.entitiesForRendering()) {
                 if(!owned(entity) || entity.distanceToSqr(cam)>maxSq) continue;
                 double x=Mth.lerp(partial,entity.xOld,entity.getX())-cam.x,y=Mth.lerp(partial,entity.yOld,entity.getY())-cam.y,z=Mth.lerp(partial,entity.zOld,entity.getZ())-cam.z;
-                try { entities.render(entity,x,y,z,Mth.lerp(partial,entity.yRotO,entity.getYRot()),partial,pose,source,entities.getPackedLightCoords(entity,partial)); objects++; }
+                objectIncomplete=false;
+                try { entities.render(entity,x,y,z,Mth.lerp(partial,entity.yRotO,entity.getYRot()),partial,pose,source,entities.getPackedLightCoords(entity,partial)); objects++; if(!objectIncomplete) entityIds.add(entity.getId()); }
                 catch(RuntimeException | LinkageError e) { MmlfLog.sampled("render.submission","dynamic_entity_failed",5000,Map.of("entity",String.valueOf(entity.getType()),"exception",e.toString())); }
                 pose.setIdentity();
             }
@@ -161,13 +179,15 @@ public final class DynamicCapture {
                     // As the level renderer does: the dispatcher draws at the pose stack's origin, so place it first.
                     var at=blockEntity.getBlockPos();
                     pose.translate(at.getX()-cam.x,at.getY()-cam.y,at.getZ()-cam.z);
-                    try { blockEntities.render(blockEntity,partial,pose,source); objects++; }
+                    objectIncomplete=false;
+                    try { blockEntities.render(blockEntity,partial,pose,source); objects++; if(!objectIncomplete) blockEntityPositions.add(at.asLong()); }
                     catch(RuntimeException | LinkageError e) { MmlfLog.sampled("render.submission","dynamic_block_entity_failed",5000,Map.of("type",String.valueOf(BuiltInRegistries.BLOCK_ENTITY_TYPE.getKey(blockEntity.getType())),"exception",e.toString())); }
                     pose.setIdentity();
                 }
             }
         } finally { capturing=false; }
         var batches=collect();
+        exportedEntities=entityIds; exportedBlockEntities=blockEntityPositions;
         for(var entry:particleBuilders.entrySet()) {
             try(MeshData mesh=entry.getValue().build()) {
                 if(mesh==null) continue;
@@ -180,11 +200,11 @@ public final class DynamicCapture {
         particleBuilders.clear();
         for(var batch:batches) publishTexture(mc,batch.texture(),now);
         try {
-            byte[] bytes=RenderDynamicCodec.encode(new RenderDynamicCodec.Frame(BridgeCore.runtimeId(),mc.level.dimension().location().toString(),generation,++frame,cameraSequence,cam.x,cam.y,cam.z,batches));
+            byte[] bytes=RenderDynamicCodec.encode(new RenderDynamicCodec.Frame(dev.mmlf.bridge.transport.SessionLink.runtimeId(),mc.level.dimension().location().toString(),generation,++frame,cameraSequence,cam.x,cam.y,cam.z,batches));
             RenderChannel.publish("dynamic",bytes);
             bytesSinceStats+=bytes.length; framesSinceStats++;
         } catch(java.io.IOException e) { MmlfLog.sampled("render.submission","dynamic_publish_failed",5000,Map.of("exception",e.toString())); }
-        dev.mmlf.bridge.ProxyItems.ownerFrame(mc,generation);
+        dev.mmlf.bridge.render.ProxyItems.ownerFrame(mc,generation);
         if(objects!=lastObjects || now-lastStats>10_000_000_000L) {
             MmlfLog.info("render.submission","dynamic_capture",Map.of("objects",objects,"batches",batches.size(),"frames",framesSinceStats,"avgBytes",framesSinceStats==0?0:bytesSinceStats/framesSinceStats,
                 "cpuMicros",(System.nanoTime()-now)/1000,"nativeWorld",NativeWorld.skipping()?"skipped":"rendered"));
@@ -192,7 +212,7 @@ public final class DynamicCapture {
         }
     }
 
-    /** The batches recorded into {@link #source} since the last collection. */
+    /** The batches recorded into {@link #source} since the last collection; ones the host cannot replay are left out. */
     private static List<RenderDynamicCodec.Batch> collect() {
         var batches=new ArrayList<RenderDynamicCodec.Batch>();
         for(var entry:active.entrySet()) {
@@ -200,7 +220,10 @@ public final class DynamicCapture {
             try(MeshData mesh=entry.getValue().build()) {
                 if(mesh==null) continue;
                 String format=formatName(type.format());
-                if(format==null) { if(unsupported.add(type.toString())) MmlfLog.info("render.submission","dynamic_format_unsupported",Map.of("renderType",type.toString())); continue; }
+                if(format==null || !REPLAYABLE.contains(type.format())) {
+                    if(unsupported.add(type.toString())) MmlfLog.info("render.submission","dynamic_format_unsupported",Map.of("renderType",type.toString()));
+                    continue;
+                }
                 var state=mesh.drawState();
                 byte[] vertices=new byte[state.vertexCount()*type.format().getVertexSize()];
                 mesh.vertexBuffer().duplicate().get(vertices);
@@ -275,7 +298,7 @@ public final class DynamicCapture {
         try {
             GL11.glGetTexImage(GL11.GL_TEXTURE_2D,0,GL11.GL_RGBA,GL11.GL_UNSIGNED_BYTE,pixels);
             byte[] data=new byte[width*height*4]; pixels.get(data);
-            RenderChannel.publish(textureChannel(key),RenderTextureCodec.encode(new RenderTextureCodec.Texture(BridgeCore.runtimeId(),mc.level.dimension().location().toString(),generation,key,"rgba8",width,height,data)));
+            RenderChannel.publish(textureChannel(key),RenderTextureCodec.encode(new RenderTextureCodec.Texture(dev.mmlf.bridge.transport.SessionLink.runtimeId(),mc.level.dimension().location().toString(),generation,key,"rgba8",width,height,data)));
             publishedTextures.put(key,now);
             if(published==null) MmlfLog.info("render.submission","dynamic_texture",Map.of("texture",key,"width",width,"height",height));
         } catch(java.io.IOException e) { MmlfLog.sampled("render.submission","dynamic_texture_failed",5000,Map.of("texture",key,"exception",e.toString())); }

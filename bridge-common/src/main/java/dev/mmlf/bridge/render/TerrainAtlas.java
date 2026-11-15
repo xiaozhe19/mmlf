@@ -18,7 +18,7 @@ public final class TerrainAtlas {
     private static volatile int reserveSize=1024;
     public static int reserveSize() { return reserveSize; }
     static void ensureCapacity(Minecraft mc,int width,int height) {
-        if(!dev.mmlf.bridge.Experiments.TERRAIN || width<=reserveSize && height<=reserveSize) return;
+        if(!dev.mmlf.bridge.platform.Experiments.TERRAIN || width<=reserveSize && height<=reserveSize) return;
         int need=Math.max(width,height), size=reserveSize;
         int max=GL11.glGetInteger(GL11.GL_MAX_TEXTURE_SIZE);
         while(size<need && size<=max/4) size*=2;
@@ -34,7 +34,7 @@ public final class TerrainAtlas {
 
     static boolean copy(RemoteTexture source,int width,int height) {
         ready=false;
-        if(!dev.mmlf.bridge.Experiments.TERRAIN) return false;
+        if(!dev.mmlf.bridge.platform.Experiments.TERRAIN) return false;
         var texture=Minecraft.getInstance().getTextureManager().getTexture(TextureAtlas.LOCATION_BLOCKS);
         if (!(texture instanceof TextureAtlas target)) return false;
         var reserve=((TextureAtlasAccessor)target).mmlf$sprites().get(RESERVE);

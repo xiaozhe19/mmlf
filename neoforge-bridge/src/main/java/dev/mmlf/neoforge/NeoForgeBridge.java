@@ -1,6 +1,5 @@
 package dev.mmlf.neoforge;
-import dev.mmlf.bridge.BridgeCore;
-import dev.mmlf.bridge.RemoteCatalog;
+import dev.mmlf.bridge.collab.RemoteCatalog;
 import net.minecraft.client.Minecraft;
 import net.minecraft.core.registries.Registries;
 import net.minecraft.world.item.CreativeModeTab;
@@ -16,25 +15,29 @@ import net.neoforged.neoforge.registries.DeferredRegister;
 public final class NeoForgeBridge {
     private static final DeferredRegister<CreativeModeTab> TABS=DeferredRegister.create(Registries.CREATIVE_MODE_TAB,"mmlf_bridge");
     private static final DeferredRegister.Blocks BLOCKS=DeferredRegister.createBlocks("mmlf_bridge");
-    private static final net.neoforged.neoforge.registries.DeferredBlock<dev.mmlf.bridge.StandInBlock> STAND_IN=BLOCKS.register("stand_in",dev.mmlf.bridge.StandInBlock::new);
+    private static final net.neoforged.neoforge.registries.DeferredBlock<dev.mmlf.bridge.collab.StandInBlock> STAND_IN=BLOCKS.register("stand_in",dev.mmlf.bridge.collab.StandInBlock::new);
+    private static final DeferredRegister<net.minecraft.world.effect.MobEffect> EFFECTS=DeferredRegister.create(Registries.MOB_EFFECT,"mmlf_bridge");
     public NeoForgeBridge(IEventBus modBus) {
-        BridgeCore.initialize("neoforge");
+        dev.mmlf.bridge.BridgeEntry.initialize("neoforge");
         dev.mmlf.bridge.render.TerrainModels.install(new NeoForgeTerrainModel());
-        dev.mmlf.bridge.ItemAccess.install(new NeoForgeItems());
+        dev.mmlf.bridge.platform.ItemAccess.install(new NeoForgeItems());
+        dev.mmlf.bridge.platform.EffectCures.install((effect,cure)->effect.getCures().contains(net.neoforged.neoforge.common.EffectCure.get(cure)));
+        for(int i=0;i<dev.mmlf.bridge.platform.RemoteEffect.SLOTS;i++) { int slot=i; EFFECTS.register(dev.mmlf.bridge.platform.RemoteEffect.key(i).getPath(),()->new dev.mmlf.bridge.platform.RemoteEffect(slot)); }
+        EFFECTS.register(modBus);
         for(int i=0;i<RemoteCatalog.POOL;i++) { int index=i; TABS.register(RemoteCatalog.poolKey(i).getPath(),()->RemoteCatalog.buildPool(index,CreativeModeTab.builder())); }
         TABS.register(modBus);
         BLOCKS.register(modBus);
-        modBus.addListener((net.neoforged.fml.event.lifecycle.FMLCommonSetupEvent e)->dev.mmlf.bridge.StandInBlock.installed(STAND_IN.get()));
+        modBus.addListener((net.neoforged.fml.event.lifecycle.FMLCommonSetupEvent e)->dev.mmlf.bridge.collab.StandInBlock.installed(STAND_IN.get()));
         NeoForge.EVENT_BUS.register(this);
     }
-    @SubscribeEvent public void onTick(ClientTickEvent.Post event) { BridgeCore.tick(Minecraft.getInstance()); }
+    @SubscribeEvent public void onTick(ClientTickEvent.Post event) { dev.mmlf.bridge.BridgeEntry.tick(Minecraft.getInstance()); }
     /**
      * A background runtime has no visible window, so a loading screen that waits for a click would hold it forever.
      * When loading reported only warnings, they go to the log and the game continues to its title screen, as the
      * screen's own button would; with any error the screen stays and the session reports the runtime as not ready.
      */
     @SubscribeEvent public void onScreen(net.neoforged.neoforge.client.event.ScreenEvent.Opening event) {
-        if(!(event.getNewScreen() instanceof net.neoforged.neoforge.client.gui.LoadingErrorScreen) || !dev.mmlf.bridge.RuntimeContext.current().background()) return;
+        if(!(event.getNewScreen() instanceof net.neoforged.neoforge.client.gui.LoadingErrorScreen) || !dev.mmlf.bridge.platform.RuntimeContext.current().background()) return;
         var issues=net.neoforged.fml.ModLoader.getLoadingIssues();
         if(issues.stream().anyMatch(i->i.severity()==net.neoforged.fml.ModLoadingIssue.Severity.ERROR)) return;
         for(var issue:issues) dev.mmlf.common.MmlfLog.warn("loader","loading_warning",java.util.Map.of("key",issue.translationKey(),"args",String.valueOf(issue.translationArgs()),

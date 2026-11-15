@@ -1,6 +1,6 @@
 package dev.mmlf.bridge.mixin;
 
-import dev.mmlf.bridge.StandInBlock;
+import dev.mmlf.bridge.collab.StandInBlock;
 import dev.mmlf.bridge.render.TerrainModels;
 import net.minecraft.client.renderer.block.BlockModelShaper;
 import net.minecraft.client.resources.model.BakedModel;

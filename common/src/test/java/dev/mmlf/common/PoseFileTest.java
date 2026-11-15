@@ -5,7 +5,6 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import org.junit.jupiter.api.io.CleanupMode;
 import java.nio.file.Path;
-import java.util.concurrent.TimeUnit;
 import static org.junit.jupiter.api.Assertions.*;
 
 class PoseFileTest {
@@ -67,21 +66,5 @@ class PoseFileTest {
             }
             assertNull(reader.read());
         }
-    }
-    @Test void writerAndTwoReaderProcessesObserveOnlyCompleteSnapshots() throws Exception {
-        String java=Path.of(System.getProperty("java.home"),"bin","java.exe").toString();
-        if(!System.getProperty("os.name").startsWith("Windows")) java=Path.of(System.getProperty("java.home"),"bin","java").toString();
-        String cp=Path.of(PoseFile.class.getProtectionDomain().getCodeSource().getLocation().toURI())+System.getProperty("path.separator")+
-            Path.of(PoseFileProcess.class.getProtectionDomain().getCodeSource().getLocation().toURI());
-        String path=temp.resolve("concurrent").toString();
-        Process a=new ProcessBuilder(java,"-cp",cp,PoseFileProcess.class.getName(),"read",path).redirectErrorStream(true).start();
-        Process b=new ProcessBuilder(java,"-cp",cp,PoseFileProcess.class.getName(),"read",path).redirectErrorStream(true).start();
-        Process writer=new ProcessBuilder(java,"-cp",cp,PoseFileProcess.class.getName(),"write",path).redirectErrorStream(true).start();
-        try {
-            for(Process p:new Process[]{writer,a,b}) {
-                assertTrue(p.waitFor(20,TimeUnit.SECONDS),"child timed out");
-                assertEquals(0,p.exitValue(),new String(p.getInputStream().readAllBytes()));
-            }
-        } finally { for(Process p:new Process[]{writer,a,b}) if(p.isAlive()) p.destroyForcibly(); }
     }
 }

@@ -1,6 +1,5 @@
 package dev.mmlf.bridge.render;
 
-import dev.mmlf.bridge.BridgeCore;
 import dev.mmlf.common.MmlfLog;
 import java.util.*;
 
@@ -18,10 +17,7 @@ public final class RenderOwnership {
     private RenderOwnership() {}
     public enum Part { SKY, WEATHER }
     private static final String MODE=System.getProperty("mmlf.renderOwnership",System.getenv().getOrDefault("MMLF_RENDER_OWNERSHIP","off")).toLowerCase(Locale.ROOT);
-    /** Diagnostic fallback: keep the far runtime's block meshes intact instead of applying owner filtering. */
-    private static final boolean FILTER_BLOCKS=!System.getProperty("mmlf.blockOwnership",
-        System.getenv().getOrDefault("MMLF_BLOCK_OWNERSHIP","filtered")).equalsIgnoreCase("full");
-    public static boolean filterBlocks() { return FILTER_BLOCKS; }
+    public static boolean filterBlocks() { return dev.mmlf.bridge.platform.Experiments.BLOCK_FILTER; }
     /** Classes whose drawing a part relies on: a foreign mixin into any of them keeps the part drawn. */
     private static final Map<Part,List<Class<?>>> DRAWN_BY=Map.of(
         Part.SKY,List.of(net.minecraft.client.renderer.LevelRenderer.class,net.minecraft.client.renderer.DimensionSpecialEffects.class),
@@ -30,7 +26,7 @@ public final class RenderOwnership {
 
     /** Whether this runtime skips drawing {@code part}; only ever true for a connected background. */
     public static boolean skip(Part part) {
-        if(!MODE.equals("safe") || BridgeCore.isPrimary() || !BridgeCore.connected()) return false;
+        if(!MODE.equals("safe") || dev.mmlf.bridge.transport.SessionLink.isPrimary() || !dev.mmlf.bridge.transport.SessionLink.connected()) return false;
         Map<Part,Boolean> d=decided;
         if(d==null) d=decided=decide();
         return d.getOrDefault(part,false);

@@ -21,16 +21,8 @@ public final class TerrainQuadPartition {
         var result=new HashMap<Cell,List<byte[]>>();
         ByteBuffer data=ByteBuffer.wrap(vertices).order(ByteOrder.LITTLE_ENDIAN);
         for(int offset=0;offset<vertices.length;offset+=128) {
-            double x=0,y=0,z=0,nx=0,ny=0,nz=0;
-            for(int i=0;i<4;i++) {
-                int at=offset+i*32;
-                float vx=data.getFloat(at),vy=data.getFloat(at+4),vz=data.getFloat(at+8);
-                if(!Float.isFinite(vx)||!Float.isFinite(vy)||!Float.isFinite(vz)) throw new IllegalArgumentException("non-finite vertex");
-                x+=vx/4.0; y+=vy/4.0; z+=vz/4.0;
-                nx+=data.get(at+28)/127.0; ny+=data.get(at+29)/127.0; nz+=data.get(at+30)/127.0;
-            }
-            double length=Math.sqrt(nx*nx+ny*ny+nz*nz);
-            if(length>1e-9) { x-=nx/length*0.001; y-=ny/length*0.001; z-=nz/length*0.001; }
+            double[] centre=centre(data,offset);
+            double x=centre[0],y=centre[1],z=centre[2];
             int cx=(int)Math.floor(x),cy=(int)Math.floor(y),cz=(int)Math.floor(z);
             Cell chosen=null;
             if(cx>=0&&cx<16&&cy>=0&&cy<16&&cz>=0&&cz<16) {
@@ -48,5 +40,35 @@ public final class TerrainQuadPartition {
         }
         result.replaceAll((cell,quads)->List.copyOf(quads));
         return Map.copyOf(result);
+    }
+    /**
+     * The cells that hold the quads' centres, as {@link #partition} places them when those cells are occupied: the block
+     * each quad belongs to. Centres outside the section are left out.
+     */
+    public static Set<Cell> cellsOf(byte[] vertices) {
+        Objects.requireNonNull(vertices);
+        if(vertices.length%128!=0) throw new IllegalArgumentException("incomplete block quad");
+        ByteBuffer data=ByteBuffer.wrap(vertices).order(ByteOrder.LITTLE_ENDIAN);
+        var cells=new HashSet<Cell>();
+        for(int offset=0;offset<vertices.length;offset+=128) {
+            double[] c=centre(data,offset);
+            int cx=(int)Math.floor(c[0]),cy=(int)Math.floor(c[1]),cz=(int)Math.floor(c[2]);
+            if(cx>=0&&cx<16&&cy>=0&&cy<16&&cz>=0&&cz<16) cells.add(new Cell(cx,cy,cz));
+        }
+        return cells;
+    }
+    /** A quad's centre, moved a hair against its normal so a face on a cell border falls in the block it belongs to. */
+    private static double[] centre(ByteBuffer data,int offset) {
+        double x=0,y=0,z=0,nx=0,ny=0,nz=0;
+        for(int i=0;i<4;i++) {
+            int at=offset+i*32;
+            float vx=data.getFloat(at),vy=data.getFloat(at+4),vz=data.getFloat(at+8);
+            if(!Float.isFinite(vx)||!Float.isFinite(vy)||!Float.isFinite(vz)) throw new IllegalArgumentException("non-finite vertex");
+            x+=vx/4.0; y+=vy/4.0; z+=vz/4.0;
+            nx+=data.get(at+28)/127.0; ny+=data.get(at+29)/127.0; nz+=data.get(at+30)/127.0;
+        }
+        double length=Math.sqrt(nx*nx+ny*ny+nz*nz);
+        if(length>1e-9) { x-=nx/length*0.001; y-=ny/length*0.001; z-=nz/length*0.001; }
+        return new double[]{x,y,z};
     }
 }

@@ -1,6 +1,6 @@
 package dev.mmlf.bridge.mixin;
 
-import dev.mmlf.bridge.InventoryBridge;
+import dev.mmlf.bridge.collab.InventoryBridge;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.trading.ItemCost;
 import org.spongepowered.asm.mixin.Mixin;

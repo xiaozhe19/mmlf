@@ -21,26 +21,26 @@ public abstract class ClientLevelMixin {
     @Inject(method="onChunkLoaded",at=@At("HEAD"),require=0)
     private void mmlf$chunkLoaded(ChunkPos pos,CallbackInfo ci) {
         dev.mmlf.bridge.render.TerrainMeshes.chunkLoaded((ClientLevel)(Object)this,pos);
-        if(dev.mmlf.bridge.Experiments.GEOMETRY) OwnedSectionCompiler.chunkLoaded((ClientLevel)(Object)this,pos);
+        if(dev.mmlf.bridge.platform.Experiments.GEOMETRY) OwnedSectionCompiler.chunkLoaded((ClientLevel)(Object)this,pos);
     }
     @Inject(method="unload",at=@At("HEAD"),require=0)
     private void mmlf$chunkUnloaded(LevelChunk chunk,CallbackInfo ci) {
-        if(dev.mmlf.bridge.Experiments.GEOMETRY) OwnedSectionCompiler.chunkUnloaded((ClientLevel)(Object)this,chunk);
+        if(dev.mmlf.bridge.platform.Experiments.GEOMETRY) OwnedSectionCompiler.chunkUnloaded((ClientLevel)(Object)this,chunk);
     }
     @Inject(method="sendBlockUpdated",at=@At("HEAD"),require=0)
     private void mmlf$blockUpdated(BlockPos pos,BlockState old,BlockState now,int flags,CallbackInfo ci) {
-        dev.mmlf.bridge.DemoScene.watch(pos,old,now,false);
+        dev.mmlf.bridge.scene.DemoScene.watch(pos,old,now,false);
         // Stand-ins arrive with the server's map: the remote block's model is placed where one appears or goes.
-        if(dev.mmlf.bridge.StandInBlock.is(old) || dev.mmlf.bridge.StandInBlock.is(now)) dev.mmlf.bridge.render.TerrainMeshes.invalidateBlock(pos);
-        if(dev.mmlf.bridge.Experiments.GEOMETRY) OwnedSectionCompiler.blockChanged((ClientLevel)(Object)this,pos);
+        if(dev.mmlf.bridge.collab.StandInBlock.is(old) || dev.mmlf.bridge.collab.StandInBlock.is(now)) dev.mmlf.bridge.render.TerrainMeshes.invalidateBlock(pos);
+        if(dev.mmlf.bridge.platform.Experiments.GEOMETRY) OwnedSectionCompiler.blockChanged((ClientLevel)(Object)this,pos);
     }
     @Inject(method="setBlocksDirty",at=@At("HEAD"),require=0)
     private void mmlf$blocksDirty(BlockPos pos,BlockState old,BlockState now,CallbackInfo ci) {
-        if(dev.mmlf.bridge.Experiments.GEOMETRY) OwnedSectionCompiler.blockChanged((ClientLevel)(Object)this,pos);
+        if(dev.mmlf.bridge.platform.Experiments.GEOMETRY) OwnedSectionCompiler.blockChanged((ClientLevel)(Object)this,pos);
     }
     /** Light updates and section-wide changes. */
     @Inject(method="setSectionDirtyWithNeighbors",at=@At("HEAD"),require=0)
     private void mmlf$sectionDirty(int x,int y,int z,CallbackInfo ci) {
-        if(dev.mmlf.bridge.Experiments.GEOMETRY) OwnedSectionCompiler.sectionChanged((ClientLevel)(Object)this,x,y,z);
+        if(dev.mmlf.bridge.platform.Experiments.GEOMETRY) OwnedSectionCompiler.sectionChanged((ClientLevel)(Object)this,x,y,z);
     }
 }

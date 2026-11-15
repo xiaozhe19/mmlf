@@ -1,5 +1,5 @@
 package dev.mmlf.bridge.mixin;
-import dev.mmlf.bridge.InJvmExit;
+import dev.mmlf.bridge.platform.InJvmExit;
 import net.minecraft.client.Minecraft;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.injection.At;

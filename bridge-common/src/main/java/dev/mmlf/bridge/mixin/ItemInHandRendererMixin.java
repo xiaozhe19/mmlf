@@ -1,9 +1,8 @@
 package dev.mmlf.bridge.mixin;
 
-import dev.mmlf.bridge.VisualLayers;
-import dev.mmlf.bridge.BridgeCore;
-import dev.mmlf.bridge.Experiments;
-import dev.mmlf.bridge.RemoteItems;
+import dev.mmlf.bridge.render.VisualLayers;
+import dev.mmlf.bridge.platform.Experiments;
+import dev.mmlf.bridge.collab.RemoteItems;
 import dev.mmlf.bridge.render.GeometryLayer;
 import net.minecraft.client.renderer.ItemInHandRenderer;
 import org.spongepowered.asm.mixin.Mixin;
@@ -23,7 +22,7 @@ public abstract class ItemInHandRendererMixin {
                 dev.mmlf.common.MmlfLog.info("render.hand","primary_suppressed",java.util.Map.of("entry","renderHandsWithItems"));
             }
             ci.cancel();
-        } else if(Experiments.GEOMETRY_REPLAY && !BridgeCore.isPrimary() && GeometryLayer.isRenderHost() && !RemoteItems.nativeHandSelected()) {
+        } else if(Experiments.GEOMETRY_REPLAY && !dev.mmlf.bridge.transport.SessionLink.isPrimary() && GeometryLayer.isRenderHost() && !RemoteItems.nativeHandSelected()) {
             // A remote scene renderer must not bake its own copy of the player's local hand into the world image.
             ci.cancel();
         }

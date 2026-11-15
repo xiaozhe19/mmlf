@@ -1,6 +1,6 @@
 package dev.mmlf.bridge.mixin;
 
-import dev.mmlf.bridge.RuntimeContext;
+import dev.mmlf.bridge.platform.RuntimeContext;
 import net.minecraft.client.renderer.texture.atlas.SpriteSource;
 import net.minecraft.client.renderer.texture.atlas.sources.SingleFile;
 import net.minecraft.resources.ResourceLocation;
@@ -20,7 +20,7 @@ public abstract class SingleFileMixin {
     private void mmlf$omitRemoteReserve(ResourceManager manager, SpriteSource.Output output, CallbackInfo ci) {
         if (!resourceId.equals(ResourceLocation.fromNamespaceAndPath("mmlf_bridge", "remote_reserve"))) return;
         ci.cancel();
-        if (RuntimeContext.current().background() || !dev.mmlf.bridge.Experiments.TERRAIN) return;
+        if (RuntimeContext.current().background() || !dev.mmlf.bridge.platform.Experiments.TERRAIN) return;
         ResourceLocation id=resourceId;
         int size=dev.mmlf.bridge.render.TerrainAtlas.reserveSize();
         output.add(id,loader -> {

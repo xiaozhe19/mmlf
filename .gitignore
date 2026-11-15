@@ -55,3 +55,9 @@ __pycache__/
 
 # 脚本不加入最小源码包；已跟踪的文件需另行从索引移除
 /scripts/
+
+
+/neoforge-test-mod/
+/fabric-test-mod/
+# 本地 CodeGraph 配置
+/codegraph.json

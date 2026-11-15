@@ -1,8 +1,8 @@
 package dev.mmlf.bridge.mixin;
 
 import com.llamalad7.mixinextras.injector.ModifyReturnValue;
-import dev.mmlf.bridge.Boundary;
-import dev.mmlf.bridge.NeighborMirror;
+import dev.mmlf.bridge.collab.Boundary;
+import dev.mmlf.bridge.collab.NeighborMirror;
 import net.minecraft.core.BlockPos;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.world.level.block.state.BlockState;
@@ -29,24 +29,27 @@ public abstract class LevelChunkMixin implements NeighborMirror.Overlaid {
  @ModifyReturnValue(method="getBlockState",at=@At("RETURN"))
  private BlockState mmlf$mirrored(BlockState own,BlockPos pos) {
   var chunk=(LevelChunk)(Object)this;
+  // A mirrored neighbour first: the primary's server state, which updated this runtime's blocks when it arrived.
+  if(mmlf$overlaid) {
+   BlockState mirrored=NeighborMirror.mirroredAt(chunk,pos);
+   if(mirrored!=null && !dev.mmlf.bridge.collab.SharedWorld.ownBlock(chunk.getLevel(),own,pos)) return mirrored;
+  }
   // The other runtime reads the primary's map wherever it has no block of its own (SharedWorld).
-  BlockState shared=dev.mmlf.bridge.SharedWorld.read(chunk,pos,own);
-  if(shared!=own || !mmlf$overlaid) return shared;
-  return NeighborMirror.read(chunk,pos,own);
+  return dev.mmlf.bridge.collab.SharedWorld.read(chunk,pos,own);
  }
  @Inject(method="setBlockState",at=@At("RETURN"))
  private void mmlf$changed(BlockPos pos,BlockState state,boolean moved,CallbackInfoReturnable<BlockState> cir) {
   // Null: nothing changed, or the block was replaced again while being removed.
   if(cir.getReturnValue()!=null && ((LevelChunk)(Object)this).getLevel() instanceof ServerLevel level) {
-   dev.mmlf.bridge.DemoScene.watch(pos,cir.getReturnValue(),state,true);
+   dev.mmlf.bridge.scene.DemoScene.watch(pos,cir.getReturnValue(),state,true);
    Boundary.changed(level,pos,state);
-   dev.mmlf.bridge.SharedWorld.changed(level,pos,state);
-   dev.mmlf.bridge.SharedWorld.primaryChanged((LevelChunk)(Object)this,pos,state);
+   dev.mmlf.bridge.collab.SharedWorld.changed(level,pos,state);
+   dev.mmlf.bridge.collab.SharedWorld.primaryChanged((LevelChunk)(Object)this,pos,state);
   }
  }
  @Inject(method="setLoaded",at=@At("TAIL"))
  private void mmlf$loaded(boolean loaded,CallbackInfo ci) {
   Boundary.chunk((LevelChunk)(Object)this,loaded);
-  dev.mmlf.bridge.SharedWorld.loaded((LevelChunk)(Object)this,loaded);
+  dev.mmlf.bridge.collab.SharedWorld.loaded((LevelChunk)(Object)this,loaded);
  }
 }

@@ -1,7 +1,6 @@
 package dev.mmlf.bridge.render;
 
 import com.mojang.blaze3d.systems.RenderSystem;
-import dev.mmlf.bridge.BridgeCore;
 import dev.mmlf.bridge.mixin.TextureAtlasAccessor;
 import dev.mmlf.common.MmlfLog;
 import dev.mmlf.common.RenderAtlasPatchCodec;
@@ -81,7 +80,7 @@ final class AtlasAnimation {
         if(hash==lastHash) return; // nothing advanced this tick
         lastHash=hash;
         try {
-            RenderChannel.publish("atlas_patch",RenderAtlasPatchCodec.encode(new RenderAtlasPatchCodec.Batch(BridgeCore.runtimeId(),generation,atlasWidth,atlasHeight,patches)));
+            RenderChannel.publish("atlas_patch",RenderAtlasPatchCodec.encode(new RenderAtlasPatchCodec.Batch(dev.mmlf.bridge.transport.SessionLink.runtimeId(),generation,atlasWidth,atlasHeight,patches)));
             if(!reported) { reported=true; MmlfLog.info("render.submission","atlas_animation_published",Map.of("patches",patches.size())); }
         } catch(java.io.IOException e) { MmlfLog.sampled("render.submission","atlas_animation_failed",5000,Map.of("exception",e.toString())); }
     }

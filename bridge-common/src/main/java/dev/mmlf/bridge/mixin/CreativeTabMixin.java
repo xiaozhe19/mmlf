@@ -1,5 +1,5 @@
 package dev.mmlf.bridge.mixin;
-import dev.mmlf.bridge.RemoteCatalog;
+import dev.mmlf.bridge.collab.RemoteCatalog;
 import net.minecraft.world.item.CreativeModeTab;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.ItemStackLinkedSet;

@@ -1,6 +1,5 @@
 package dev.mmlf.bridge.render;
 
-import dev.mmlf.bridge.BridgeCore;
 import dev.mmlf.common.MmlfLog;
 import dev.mmlf.common.Messages.Event;
 import dev.mmlf.common.RenderShaderRegistry;
@@ -38,13 +37,13 @@ public final class RenderShaderCapabilities {
     public static void tick() {
         discover(); long now=System.nanoTime();
         if(now-lastSend<2_000_000_000L) return; lastSend=now;
-        var state=registry.probe(); reports.put(BridgeCore.runtimeId(),new Report(state,now));
+        var state=registry.probe(); reports.put(dev.mmlf.bridge.transport.SessionLink.runtimeId(),new Report(state,now));
         var values=new HashMap<String,String>(); values.put("state",state.name());
-        if(BridgeCore.isPrimary()) reportStates(now);
-        BridgeCore.send("event","*",new Event("mmlf:render_shader_capability",values));
+        if(dev.mmlf.bridge.transport.SessionLink.isPrimary()) reportStates(now);
+        dev.mmlf.bridge.transport.SessionLink.send("event","*",new Event("mmlf:render_shader_capability",values));
     }
     public static void receive(String source,Map<String,String> values) {
-        if(!Set.of("fabric","neoforge").contains(source) || source.equals(BridgeCore.runtimeId()) || values==null) return;
+        if(!Set.of("fabric","neoforge").contains(source) || source.equals(dev.mmlf.bridge.transport.SessionLink.runtimeId()) || values==null) return;
         try { reports.put(source,new Report(RenderShaderRegistry.State.valueOf(values.get("state")),System.nanoTime())); }
         catch(IllegalArgumentException | NullPointerException ignored) { }
     }

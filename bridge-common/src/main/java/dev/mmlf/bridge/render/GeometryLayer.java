@@ -1,9 +1,9 @@
 package dev.mmlf.bridge.render;
+import dev.mmlf.bridge.transport.PoseChannel;
 
 import com.mojang.blaze3d.systems.RenderSystem;
 import com.mojang.blaze3d.vertex.*;
-import dev.mmlf.bridge.BridgeCore;
-import dev.mmlf.bridge.Experiments;
+import dev.mmlf.bridge.platform.Experiments;
 import dev.mmlf.common.MmlfLog;
 import dev.mmlf.common.RenderDynamicCodec;
 import dev.mmlf.common.RenderSectionStore;
@@ -74,7 +74,7 @@ public final class GeometryLayer {
  // ---- render host state (render thread) ----
  /** A received static mesh, little-endian {@code minecraft:block-v1} vertices relative to its section origin. */
  private record Mesh(long section,String pass,ByteBuffer vertices,int count) {}
- private record CachedSection(List<RenderSectionStore.Layer> layers,List<Mesh> meshes) {}
+ private record CachedSection(List<RenderSectionStore.Layer> layers,List<Mesh> meshes,boolean complete) {}
  private static final Map<RenderSectionStore.Key,CachedSection> cachedSections=new HashMap<>();
  private static final Map<String,List<Mesh>> staticByPass=new HashMap<>();
  private static final Map<String,RenderType> remoteTypes=new HashMap<>();
@@ -96,6 +96,9 @@ public final class GeometryLayer {
  private static final RenderChannel.Cursor geometryCursor=new RenderChannel.Cursor(),atlasCursor=new RenderChannel.Cursor(),dynamicCursor=new RenderChannel.Cursor();
  private static long worldFrames,framesAtStats,lastPoll,drawNanos,drawVertices,drawCount,lastDrawNanos,lastConsumedSignal,lastDynamicNanos;
  private static long acceptedGeneration=-1,acceptedRevision=-1;
+ private static long signalledGeneration=-1,signalledRevision=-1;
+ private static boolean staticCoverage,dynamicCoverage,signalledCoverage;
+ private static final RenderSectionStore.Layer NATIVE_FALLBACK=new RenderSectionStore.Layer("mmlf:native_fallback",0,new byte[0]);
  private static volatile RenderSectionStore.Snapshot remoteSnapshot;
  private static RemoteTexture atlas;
  private static ResourceLocation atlasLocation;
@@ -106,8 +109,8 @@ public final class GeometryLayer {
  /** Compile results rejected while a scene reset was pending; compiled again once the scene is current. */
  private static final Map<Long,Object> pendingRecompile=new java.util.concurrent.ConcurrentHashMap<>();
  /** The window owner draws the whole scene; the other runtime only submits. */
- public static String renderHost() { return BridgeCore.primaryId(); }
- public static boolean isRenderHost() { return BridgeCore.isPrimary(); }
+ public static String renderHost() { return dev.mmlf.bridge.transport.SessionLink.primaryId(); }
+ public static boolean isRenderHost() { return dev.mmlf.bridge.transport.SessionLink.isPrimary(); }
  private static String background() { return RenderHostPolicy.other(renderHost()); }
  /** Render host: whether the submitter's dynamic content currently arrives, so the things it draws may be left to it. */
  public static boolean ownerSubmitting() {
@@ -138,10 +141,12 @@ public final class GeometryLayer {
   }
   long started=System.nanoTime();
   var copies=new ArrayList<RenderSectionStore.Layer>();
+  boolean fallback=false;
   for(var entry:layers.entrySet()) {
    MeshData.DrawState state=entry.getValue().drawState();
    if(state.format()!=DefaultVertexFormat.BLOCK || state.mode()!=VertexFormat.Mode.QUADS) {
     if(!unsupportedLogged) { unsupportedLogged=true; MmlfLog.info("experiment","geometry_unsupported",Map.of("renderType",entry.getKey().toString(),"format",state.format().toString(),"mode",state.mode().toString())); }
+    fallback=true;
     continue;
    }
    ByteBuffer source=entry.getValue().vertexBuffer();
@@ -149,11 +154,15 @@ public final class GeometryLayer {
    source.duplicate().get(bytes);
    copies.add(new RenderSectionStore.Layer(name(entry.getKey()),state.vertexCount(),bytes));
   }
+  // A section the host cannot draw in full is drawn by this runtime alone: the host gets only the marker, never a
+  // part of it to draw on top of this runtime's own copy.
+  if(fallback) { copies.clear(); copies.add(NATIVE_FALLBACK); }
   copies.sort(Comparator.comparing(RenderSectionStore.Layer::renderType));
   // Empty sections contribute nothing; remove an older mesh instead of repeatedly exporting empty entries.
   boolean accepted=copies.isEmpty() ? submissions.removeVersioned(generation,"minecraft:sections",section.asLong(),compileRevision) :
    submissions.submitVersioned(generation,"minecraft:sections",section.asLong(),compileRevision,System.currentTimeMillis(),copies);
   if(!accepted) return;
+  OwnedSectionCompiler.submissionAccepted(section.asLong(),!fallback && !copies.isEmpty());
   MmlfLog.sampled("experiment","geometry_capture",2000,Map.of("section",section.toString(),"layers",copies.size(),"copyMicros",(System.nanoTime()-started)/1000));
  }
  private static String name(RenderType type) {
@@ -174,13 +183,15 @@ public final class GeometryLayer {
     previousRenderHost=selectedHost;
     RenderInstanceChannel.reset(submissions.resetScene());
     atlasWritten=false;
-    exportedVersion=0; exportedGeneration=-1; exportedSections=Map.of();
-    resetHost(mc);
+    exportedVersion=-1; exportedGeneration=-1; exportedSections=Map.of();
+    // A new world of the host's: nothing received for the one before belongs to it.
+    resetHost(mc,currentScene!=null && previousScene!=currentScene);
+    if(currentScene!=null) previousScene=currentScene;
     assetsInvalidated=false;
    }
   }
   // A new generation makes the submission compiler rescan and resubmit; no renderer rebuild is needed for that.
-  if(hostChanged) MmlfLog.info("render.capability","render_host_changed",Map.of("runtime",BridgeCore.runtimeId(),"host",String.valueOf(selectedHost)));
+  if(hostChanged) MmlfLog.info("render.capability","render_host_changed",Map.of("runtime",dev.mmlf.bridge.transport.SessionLink.runtimeId(),"host",String.valueOf(selectedHost)));
   if(mc.level!=null && !pendingRecompile.isEmpty()) {
    Object scene; synchronized(sceneLock) { scene=currentScene; }
    for(var entry:pendingRecompile.entrySet()) {
@@ -191,21 +202,23 @@ public final class GeometryLayer {
    }
   }
   OwnedSectionCompiler.tick(mc);
-  if(BridgeCore.session()==null || mc.level==null || !BridgeCore.connected()) return;
+  if(dev.mmlf.bridge.transport.SessionLink.session()==null || mc.level==null || !dev.mmlf.bridge.transport.SessionLink.connected()) return;
   RenderShaderCapabilities.tick();
   RenderInstanceProbe.tick();
   RenderInstanceChannel.tick(mc,background());
   if(isRenderHost()) { poll(); confirmConsumption(mc); return; }
+  // The primary is leaving its world: this one's content is no longer shown there.
+  if(dev.mmlf.bridge.world.Worlds.backgroundLeaving()) return;
   if(!atlasWritten) writeAtlas(mc);
   else if(Experiments.GEOMETRY_REPLAY) AtlasAnimation.publish(mc,submissions.generation());
   exportSubmissions(mc);
  }
 
  /** In one JVM the channels are memory handovers: no reason to batch changes, so submissions follow every frame. */
- private static boolean sameJvm() { return BridgeCore.session()!=null && BridgeCore.session().inJvm(); }
+ private static boolean sameJvm() { return dev.mmlf.bridge.transport.SessionLink.session()!=null && dev.mmlf.bridge.transport.SessionLink.session().inJvm(); }
  /** Submitter, render thread, each frame in one JVM: starts compiles of changed sections and exports finished ones at once. */
  public static void submitterFrame(Minecraft mc) {
-  if(!sameJvm() || !atlasWritten || mc.level==null || isRenderHost()) return;
+  if(!sameJvm() || !atlasWritten || mc.level==null || isRenderHost() || dev.mmlf.bridge.world.Worlds.backgroundLeaving()) return;
   OwnedSectionCompiler.frame(mc);
   exportSubmissions(mc);
  }
@@ -237,7 +250,7 @@ public final class GeometryLayer {
     newest=Math.max(newest,section.capturedMs());
     for(var layer:section.layers()) vertices+=layer.vertexCount();
    }
-   byte[] bytes=RenderGeometryCodec.encode(new RenderGeometryCodec.Batch(BridgeCore.runtimeId(),mc.level.dimension().location().toString(),now,payload,full,removed));
+   byte[] bytes=RenderGeometryCodec.encode(new RenderGeometryCodec.Batch(dev.mmlf.bridge.transport.SessionLink.runtimeId(),mc.level.dimension().location().toString(),now,payload,full,removed));
    if(!ordered) RenderChannel.publish("geometry",bytes);
    else if(!RenderChannel.append("geometry",bytes,GEOMETRY_QUEUE_LIMIT)) {
     // The render host is not reading: what it missed is dropped, and it gets the whole scene next.
@@ -252,8 +265,40 @@ public final class GeometryLayer {
   } catch(IOException e) { MmlfLog.sampled("experiment","geometry_export_failed",2000,Map.of("exception",e.toString())); }
  }
 
- /** Scene reset on the render host: everything received belongs to the previous scene. */
- private static void resetHost(Minecraft mc) {
+ /**
+  * Render host: the oldest submitter scene generation it accepts. Generations only grow, and the submitter starts a
+  * new one for each world it opens; after the host's own world changes, everything of the generations it accepted
+  * before (a latest-value channel still holding the previous world's frame, a queued change of it) is ignored, so
+  * nothing of one world is ever drawn in another.
+  */
+ private static long minGeneration=0;
+ private static Object previousScene;
+ /** Render host, render thread: a submitter (re)joined; a restarted runtime counts its generations from the start. */
+ public static void submitterJoined(String runtime) {
+  if(!isRenderHost() || !Objects.equals(runtime,background())) return;
+  minGeneration=0; acceptedGeneration=acceptedRevision=-1; dynamicGeneration=dynamicFrame=-1; atlasGeneration=-1;
+ }
+ /** Submitter: the host entered a new world and accepts only a new scene generation; one is started now. */
+ public static void hostReset(Map<String,String> values) {
+  var mc=Minecraft.getInstance();
+  mc.execute(()->{
+   if(mc.level==null || isRenderHost() || dev.mmlf.bridge.world.Worlds.backgroundLeaving()) return;
+   MmlfLog.info("render.submission","host_reset",Map.of("generation",sceneGeneration()));
+   invalidateAssets();
+  });
+ }
+
+ private static void resetHost(Minecraft mc,boolean newWorld) {
+  if(newWorld && isRenderHost()) {
+   long seen=Math.max(Math.max(acceptedGeneration,dynamicGeneration),atlasGeneration);
+   if(seen>=minGeneration) minGeneration=seen+1;
+   // Asks the submitter for a fresh generation in case its world did not change with this one's (a respawn).
+   if(seen>=0 && dev.mmlf.bridge.transport.SessionLink.session()!=null && dev.mmlf.bridge.transport.SessionLink.connected())
+    dev.mmlf.bridge.transport.SessionLink.send("event",background(),new dev.mmlf.common.Messages.Event("mmlf:render_reset",Map.of("minGeneration",Long.toString(minGeneration))));
+   MmlfLog.info("render.submission","host_world_changed",Map.of("minGeneration",minGeneration));
+  }
+  staticCoverage=dynamicCoverage=false;
+  signalledGeneration=signalledRevision=-1;
   acceptedGeneration=acceptedRevision=-1;
   remoteSnapshot=null;
   TerrainMeshes.clear(); TerrainAtlas.ready=false;
@@ -269,8 +314,8 @@ public final class GeometryLayer {
   remoteTypes.clear();
   geometryCursor.reset(); atlasCursor.reset(); dynamicCursor.reset();
   pendingGeometry.clear(); remoteSections.clear(); awaitingWholeScene=true;
-  if(isRenderHost() && BridgeCore.session()!=null && RenderChannel.ordered()) RenderChannel.requestRestart(background(),"geometry");
-  dev.mmlf.bridge.ProxyItems.reset();
+  if(isRenderHost() && dev.mmlf.bridge.transport.SessionLink.session()!=null && RenderChannel.ordered()) RenderChannel.requestRestart(background(),"geometry");
+  dev.mmlf.bridge.render.ProxyItems.reset();
   RemoteProxy.removeCurrent();
  }
 
@@ -290,7 +335,7 @@ public final class GeometryLayer {
    long started=System.nanoTime();
    GL11.glGetTexImage(GL11.GL_TEXTURE_2D,0,GL11.GL_RGBA,GL11.GL_UNSIGNED_BYTE,pixels);
    byte[] data=new byte[width*height*4]; pixels.get(data);
-   RenderChannel.publish("atlas",RenderTextureCodec.encode(new RenderTextureCodec.Texture(BridgeCore.runtimeId(),mc.level.dimension().location().toString(),
+   RenderChannel.publish("atlas",RenderTextureCodec.encode(new RenderTextureCodec.Texture(dev.mmlf.bridge.transport.SessionLink.runtimeId(),mc.level.dimension().location().toString(),
     submissions.generation(),"minecraft:block-atlas","rgba8",width,height,data)));
    atlasWritten=true;
    MmlfLog.info("experiment","geometry_atlas",Map.of("width",width,"height",height,"bytes",data.length,"micros",(System.nanoTime()-started)/1000));
@@ -312,6 +357,7 @@ public final class GeometryLayer {
    if(RenderChannel.ordered()) {
     for(byte[] bytes:RenderChannel.drain(runtime,"geometry")) {
      var batch=RenderGeometryCodec.decode(bytes);
+     if(batch.snapshot().generation()<minGeneration) continue;
      if(batch.full()) { pendingGeometry.clear(); awaitingWholeScene=false; }
      else if(awaitingWholeScene) continue;
      pendingGeometry.add(batch);
@@ -329,6 +375,7 @@ public final class GeometryLayer {
     || !texture.resource().equals("minecraft:block-atlas") || !texture.format().equals("rgba8")) throw new IOException("texture resource unsupported or scene mismatch");
   byte[] data=texture.data();
   if((long)texture.width()*texture.height()*4!=data.length) throw new IOException("invalid rgba8 texture size");
+  if(texture.generation()<minGeneration) return;
   if(atlas==null) {
    atlas=new RemoteTexture(true);
    atlasLocation=ResourceLocation.fromNamespaceAndPath("mmlf","remote/"+background()+"/blocks");
@@ -373,7 +420,7 @@ public final class GeometryLayer {
   if(!batch.runtime().equals(background()) || mc.level==null || !batch.dimension().equals(mc.level.dimension().location().toString()))
    throw new IOException("geometry scene mismatch");
   long generation=batch.snapshot().generation(),revision=batch.snapshot().revision();
-  if(generation<acceptedGeneration || generation==acceptedGeneration && revision<=acceptedRevision) return;
+  if(generation<minGeneration || generation<acceptedGeneration || generation==acceptedGeneration && revision<=acceptedRevision) return;
   if(!batch.full() && generation!=acceptedGeneration) throw new IOException("geometry change without its scene");
   boolean needsAtlas=batch.snapshot().sections().values().stream().flatMap(s->s.layers().stream()).anyMatch(RECEIVER_CAPABILITIES::accepts);
   if(needsAtlas && (atlas==null || generation!=atlasGeneration)) throw new IOException("geometry texture generation mismatch");
@@ -392,18 +439,22 @@ public final class GeometryLayer {
     continue;
    }
    var sectionMeshes=new ArrayList<Mesh>();
+   boolean complete=true;
    for(var layer:entry.getValue().layers()) {
     int count=layer.vertexCount();
     if(!RECEIVER_CAPABILITIES.accepts(layer) || count%4!=0 || !layer.meshId().isEmpty()) {
-     MmlfLog.sampled("render.submission","unsupported_mesh",5000,Map.of("pass",layer.renderType(),"format",layer.vertexFormat(),"topology",layer.topology())); continue;
+     complete=false;
+     MmlfLog.sampled("render.submission","unsupported_mesh",5000,Map.of("pass",layer.renderType(),"format",layer.vertexFormat(),"topology",layer.topology()));
+     continue;
     }
     if(count==0) continue;
     sectionMeshes.add(new Mesh(key,layer.renderType(),ByteBuffer.wrap(layer.vertices()).order(ByteOrder.LITTLE_ENDIAN),count));
     vertices+=count;
    }
-   next.put(entry.getKey(),new CachedSection(entry.getValue().layers(),List.copyOf(sectionMeshes))); rebuilt++;
+   next.put(entry.getKey(),new CachedSection(entry.getValue().layers(),List.copyOf(sectionMeshes),complete)); rebuilt++;
   }
   cachedSections.clear(); cachedSections.putAll(next);
+  staticCoverage=cachedSections.values().stream().allMatch(CachedSection::complete);
   staticByPass.clear();
   for(var section:cachedSections.values()) for(Mesh mesh:section.meshes()) staticByPass.computeIfAbsent(mesh.pass(),k->new ArrayList<>()).add(mesh);
   if(batch.full()) remoteSections.clear();
@@ -422,17 +473,17 @@ public final class GeometryLayer {
  /** Render host, render thread, at the start of each world frame: takes the newest dynamic frame and places the stand-in. */
  public static void beginFrame(float partial) {
   var mc=Minecraft.getInstance();
-  boolean host=Experiments.GEOMETRY_REPLAY && BridgeCore.session()!=null && BridgeCore.connected() && mc.level!=null && isRenderHost();
+  boolean host=Experiments.GEOMETRY_REPLAY && dev.mmlf.bridge.transport.SessionLink.session()!=null && dev.mmlf.bridge.transport.SessionLink.connected() && mc.level!=null && isRenderHost();
   if(!host) { RemoteProxy.removeCurrent(); return; }
   worldFrames++;
   // In one JVM the newest submitted sections are taken every frame instead of every client tick.
   if(sameJvm()) poll();
   TerrainMeshes.refresh(mc,remoteSnapshot,atlasWidth,atlasHeight);
-  dev.mmlf.bridge.ProxyItems.hostFrame(mc);
+  dev.mmlf.bridge.render.ProxyItems.hostFrame(mc);
   if(atlasCurrent()) AtlasAnimation.apply(background(),atlas,atlasGeneration,atlasWidth,atlasHeight);
   try {
    // Frame alignment (opt-in, costs frame rate): wait briefly for the capture that followed this runtime's last pose.
-   long target=FRAME_ALIGN_NANOS>0 ? BridgeCore.publishedPoseSequence() : 0;
+   long target=FRAME_ALIGN_NANOS>0 ? PoseChannel.publishedSequence() : 0;
    long deadline=System.nanoTime()+FRAME_ALIGN_NANOS;
    while(true) {
     byte[] bytes=RenderChannel.poll(background(),"dynamic",dynamicCursor,RenderDynamicCodec.MAX_BYTES+65536);
@@ -444,13 +495,15 @@ public final class GeometryLayer {
    if(target>0) { alignFrames++; if(dynamicCamera<target) alignMisses++;
     if(alignFrames%600==0) { MmlfLog.info("render.submission","frame_align",Map.of("frames",alignFrames,"misses",alignMisses,"budgetMs",FRAME_ALIGN_NANOS/1e6)); alignMisses=0; } }
   } catch(IOException | RuntimeException e) { MmlfLog.sampled("render.submission","dynamic_receive_failed",2000,Map.of("exception",e.toString())); }
+  // The submitter's entities stay where its last frame put them only while frames keep coming.
+  if(!dynamicDraws.isEmpty() && System.nanoTime()-lastDynamicNanos>DYNAMIC_STALE_NANOS) dynamicDraws=List.of();
   boolean content=(atlasCurrent() && !staticByPass.isEmpty()) || !dynamicDraws.isEmpty();
   RemoteProxy.place(mc,content);
  }
 
  private static void loadDynamic(Minecraft mc,RenderDynamicCodec.Frame frame) {
   if(!frame.runtime().equals(background()) || !frame.dimension().equals(mc.level.dimension().location().toString())
-    || frame.generation()<dynamicGeneration || frame.generation()==dynamicGeneration && frame.frame()<=dynamicFrame) return;
+    || frame.generation()<minGeneration || frame.generation()<dynamicGeneration || frame.generation()==dynamicGeneration && frame.frame()<=dynamicFrame) return;
   var draws=new ArrayList<Draw>(frame.batches().size());
   int skipped=0;
   boolean blobShadows=drawsBlobShadows(mc);
@@ -464,6 +517,7 @@ public final class GeometryLayer {
    if(type==null) { skipped++; continue; }
    draws.add(new Draw(type,format,ByteBuffer.wrap(batch.vertices()).order(ByteOrder.LITTLE_ENDIAN),batch.vertexCount(),offsets(format)));
   }
+  dynamicCoverage=skipped==0;
   dynamicDraws=draws; dynamicFrame=frame.frame(); dynamicGeneration=frame.generation(); lastDynamicNanos=System.nanoTime(); dynamicCamera=frame.cameraSequence();
   dynamicX=frame.originX(); dynamicY=frame.originY(); dynamicZ=frame.originZ();
   if(skipped>0) MmlfLog.sampled("render.submission","dynamic_batches_skipped",5000,Map.of("skipped",skipped,"drawn",draws.size()));
@@ -507,12 +561,53 @@ public final class GeometryLayer {
   * chunk-layer copy for block layers, or by vertex format for unknown names. Null while the texture has not arrived
   * (retried next frame) or when nothing equivalent exists (remembered).
   */
+ private static String unprefixed(String name) {
+  for(String prefix:new String[]{"neoforge_","forge_","fabric_"}) if(name.startsWith(prefix)) return name.substring(prefix.length());
+  return name;
+ }
+ private static final Map<VertexFormat,Supplier<net.minecraft.client.renderer.ShaderInstance>> GENERIC_SHADERS=Map.of(
+  DefaultVertexFormat.POSITION,net.minecraft.client.renderer.GameRenderer::getPositionShader,
+  DefaultVertexFormat.POSITION_COLOR,net.minecraft.client.renderer.GameRenderer::getPositionColorShader,
+  DefaultVertexFormat.POSITION_TEX,net.minecraft.client.renderer.GameRenderer::getPositionTexShader,
+  DefaultVertexFormat.POSITION_TEX_COLOR,net.minecraft.client.renderer.GameRenderer::getPositionTexColorShader,
+  DefaultVertexFormat.POSITION_COLOR_LIGHTMAP,net.minecraft.client.renderer.GameRenderer::getPositionColorLightmapShader,
+  DefaultVertexFormat.POSITION_COLOR_TEX_LIGHTMAP,net.minecraft.client.renderer.GameRenderer::getPositionColorTexLightmapShader,
+  DefaultVertexFormat.POSITION_COLOR_NORMAL,net.minecraft.client.renderer.GameRenderer::getRendertypeLinesShader);
+ /**
+  * A translucent, depth-tested render type for one vertex format and mode, with the vanilla shader of that format
+  * and the received texture bound; null for a format without one (then the batch is not drawn, and logged).
+  */
+ private static RenderType genericType(Minecraft mc,String name,String texture,VertexFormat format,VertexFormat.Mode mode) {
+  var shader=GENERIC_SHADERS.get(format);
+  if(shader==null) return null;
+  int id=0;
+  if(!texture.isEmpty()) {
+   ResourceLocation location=textureLocation(mc,texture);
+   if(location==null) return null;
+   id=mc.getTextureManager().getTexture(location).getId();
+  }
+  final int bound=id;
+  boolean lit=format.contains(VertexFormatElement.UV2);
+  var light=mc.gameRenderer.lightTexture();
+  MmlfLog.info("render.submission","dynamic_type_generic",Map.of("renderType",name,"format",String.valueOf(DynamicCapture.formatName(format)),"mode",mode.name()));
+  return remoteTypes.computeIfAbsent("generic:"+DynamicCapture.formatName(format)+":"+mode+"@"+bound,k->new RenderType("mmlf_remote_generic",format,mode,1536,false,true,()->{
+   RenderSystem.setShader(shader);
+   if(bound!=0) RenderSystem.setShaderTexture(0,bound);
+   RenderSystem.enableDepthTest(); RenderSystem.depthMask(true);
+   RenderSystem.enableBlend(); RenderSystem.defaultBlendFunc();
+   if(lit) light.turnOnLightLayer();
+  },()->{ if(lit) light.turnOffLightLayer(); RenderSystem.disableBlend(); RenderSystem.defaultBlendFunc(); }) {});
+ }
+ /** A remote frame not renewed for this long (the submitter left its world, or stopped) is no longer drawn. */
+ private static final long DYNAMIC_STALE_NANOS=1_000_000_000L;
+ /** Render host, leaving its world: nothing of the submitter's last frame outlives it. */
+ public static void hostWorldLeft() { dynamicDraws=List.of(); RemoteProxy.removeCurrent(); TerrainMeshes.forgetPredictions(); }
  private static RenderType dynamicType(Minecraft mc,String name,String texture,VertexFormat format,VertexFormat.Mode mode) {
   String key=name+"|"+texture+"|"+DynamicCapture.formatName(format)+"|"+mode;
   var cached=dynamicTypes.get(key);
   if(cached!=null) return cached.orElse(null);
   RenderType type=null;
-  var untextured=UNTEXTURED.get(name);
+  var untextured=UNTEXTURED.getOrDefault(name,UNTEXTURED.get(unprefixed(name)));
   if(untextured!=null) type=untextured.get();
   else if(!texture.isEmpty()) {
    ResourceLocation location=textureLocation(mc,texture);
@@ -521,10 +616,17 @@ public final class GeometryLayer {
    if(chunkType(name)!=null) type=remoteType(name.equals("translucent_moving_block")?"translucent":name,id);
    else if(name.equals("terrain_sheet") || name.startsWith("particle_sheet_")) type=particleType(name,id);
    else if(TEXTURED.containsKey(name)) type=TEXTURED.get(name).apply(location);
+   // A loader's copy of a vanilla type (NeoForge's linear-filtered "neoforge_text" for name tags): the vanilla one.
+   else if(TEXTURED.containsKey(unprefixed(name))) type=TEXTURED.get(unprefixed(name)).apply(location);
    else if(format==DefaultVertexFormat.NEW_ENTITY) type=RenderType.entityTranslucent(location);
+   else if(format==DefaultVertexFormat.POSITION_COLOR_TEX_LIGHTMAP) type=name.contains("see_through") ? RenderType.textSeeThrough(location) : RenderType.text(location);
    else if(format==DefaultVertexFormat.BLOCK) type=remoteType("translucent",id);
+   else if(format==DefaultVertexFormat.PARTICLE) type=particleType("particle_sheet_translucent",id);
   }
   if(type!=null && (type.format()!=format || type.mode()!=mode)) type=null;
+  // Any other type of a format this runtime replays: a generic one of that format and mode. A submission is never
+  // left out for its name, so the submitter's rule (DynamicCapture.REPLAYABLE) holds: what it sends is drawn here.
+  if(type==null) type=genericType(mc,name,texture,format,mode);
   if(type==null) MmlfLog.info("render.submission","dynamic_type_unsupported",Map.of("renderType",name,"texture",texture,"format",String.valueOf(DynamicCapture.formatName(format)),"mode",mode.name()));
   dynamicTypes.put(key,Optional.ofNullable(type));
   return type;
@@ -598,11 +700,18 @@ public final class GeometryLayer {
   var pose=poseStack.last(); Matrix4f matrix=pose.pose(); Matrix3f normalMatrix=pose.normal();
   Vector3f position=new Vector3f(),normal=new Vector3f();
   int meshes=0,vertices=0;
+  // Only within this runtime's own render distance and loaded chunks: the submitter's area can be larger, and a
+  // section the host's renderer never compiles was re-emitted here every frame (and showed past the terrain's edge).
+  var mc=Minecraft.getInstance();
+  int distance=mc.options.getEffectiveRenderDistance();
+  int cx=SectionPos.blockToSectionCoord((int)Math.floor(px)),cz=SectionPos.blockToSectionCoord((int)Math.floor(pz));
   if(atlasCurrent()) for(String pass:PASSES) {
    VertexConsumer out=null;
    for(Mesh mesh:staticByPass.getOrDefault(pass,List.of())) {
     long key=mesh.section();
     if(TerrainModels.enabled() && TerrainMeshes.hasSection(key)) continue;
+    int sx=SectionPos.x(key),sz=SectionPos.z(key);
+    if(Math.abs(sx-cx)>distance || Math.abs(sz-cz)>distance || mc.level==null || !mc.level.hasChunk(sx,sz)) continue;
     int x=SectionPos.sectionToBlockCoord(SectionPos.x(key)),y=SectionPos.sectionToBlockCoord(SectionPos.y(key)),z=SectionPos.sectionToBlockCoord(SectionPos.z(key));
     if(frustum!=null && !frustum.isVisible(new AABB(x,y,z,x+16,y+16,z+16))) continue;
     if(out==null) out=buffers.getBuffer(remoteType(pass,atlas.getId()));
@@ -706,11 +815,20 @@ public final class GeometryLayer {
   // Ready for everything submitted: the atlas matches, dynamic frames arrive, and the stand-in is being drawn
   // (or there is nothing to draw, in which case the submitter's own world is redundant too).
   boolean drawing=now-lastDrawNanos<1_000_000_000L || staticByPass.isEmpty() && dynamicDraws.isEmpty();
-  if(!Experiments.GEOMETRY_REPLAY || acceptedGeneration<0 || !atlasCurrent() || now-lastDynamicNanos>1_000_000_000L
-    || !drawing || now-lastConsumedSignal<1_000_000_000L) return;
+  if(!Experiments.GEOMETRY_REPLAY || acceptedGeneration<0) return;
+  // Whether the host draws this scene at all; which parts of it the submitter leaves to the host it decides itself,
+  // section by section and object by object, from what it could submit in full.
+  boolean covered=dynamicGeneration==acceptedGeneration && !awaitingWholeScene && atlasCurrent()
+      && now-lastDynamicNanos<=1_000_000_000L && drawing;
+  if(covered==signalledCoverage && acceptedGeneration==signalledGeneration && acceptedRevision==signalledRevision
+      && now-lastConsumedSignal<1_000_000_000L) return;
   lastConsumedSignal=now;
-  BridgeCore.send("event",background(),new dev.mmlf.common.Messages.Event("mmlf:geometry_consumed",
-   Map.of("generation",Long.toString(acceptedGeneration),"dimension",mc.level.dimension().location().toString())));
+  signalledCoverage=covered;
+  signalledGeneration=acceptedGeneration;
+  signalledRevision=acceptedRevision;
+  dev.mmlf.bridge.transport.SessionLink.send("event",background(),new dev.mmlf.common.Messages.Event("mmlf:geometry_consumed",
+      Map.of("generation",Long.toString(acceptedGeneration),"revision",Long.toString(acceptedRevision),
+          "covered",Boolean.toString(covered),"dimension",mc.level.dimension().location().toString())));
  }
  /** Submitter: the render host's confirmation, accepted only from the current host and for this dimension. */
  public static void receiveConsumed(String source,Map<String,String> values) {
@@ -718,8 +836,13 @@ public final class GeometryLayer {
   var mc=Minecraft.getInstance();
   try {
    long generation=Long.parseLong(values.get("generation"));
+   long revision=Long.parseLong(values.get("revision"));
+   boolean covered=Boolean.parseBoolean(values.get("covered"));
    String dimension=values.get("dimension");
-   mc.execute(()->{ if(mc.level!=null && mc.level.dimension().location().toString().equals(dimension)) OwnedSectionCompiler.acknowledged(generation); });
+   mc.execute(()->{
+    if(mc.level!=null && mc.level.dimension().location().toString().equals(dimension))
+     OwnedSectionCompiler.acknowledged(generation,revision,covered);
+   });
   } catch(NumberFormatException | NullPointerException ignored) { }
  }
 }

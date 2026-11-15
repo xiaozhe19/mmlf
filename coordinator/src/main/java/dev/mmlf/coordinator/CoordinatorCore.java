@@ -89,6 +89,8 @@ public final class CoordinatorCore {
                 case "signals", "neighbors", "transfer" -> { if(m.delivery()==null) throw new IllegalArgumentException(m.type()+" must be reliable"); relay(c,m); }
                 case "ack" -> { if(m.target()==null || m.target().equals("*")) throw new IllegalArgumentException("ack needs a target"); relay(c,m); }
                 case "player" -> { if(!id.equals(primary)) throw new IllegalArgumentException("only primary owns the player"); relay(c,m); }
+                case "player_vitals" -> { if(!id.equals(primary)) throw new IllegalArgumentException("only primary owns the player"); relay(c,m); }
+                case "player_change", "player_own" -> { if(id.equals(primary)) throw new IllegalArgumentException("the primary changes its player itself"); toPrimary(id,m); }
                 case "interaction_result", "gui" -> { toPrimary(id,m); MmlfLog.debug("gui","relayed",Map.of("type",m.type(),"source",id)); }
                 case "entities" -> {
                     Entities snapshot=m.body(Entities.class);
@@ -99,7 +101,8 @@ public final class CoordinatorCore {
                 }
                 case "player_damage" -> {
                     PlayerDamage damage=m.body(PlayerDamage.class);
-                    if(!ownsEntity(id,damage.attacker()) || !(damage.amount()>0) || damage.amount()>1000) throw new IllegalArgumentException("damage must come from the sender's own entity");
+                    // No attacker: damage the sender's own logic did to its copy of the player (its mods, its own effects).
+                    if((damage.attacker()!=null && !ownsEntity(id,damage.attacker())) || !(damage.amount()>0) || damage.amount()>1000) throw new IllegalArgumentException("damage must come from the sender's own entity or logic");
                     toPrimary(id,m);
                 }
                 case "player_xp" -> {
@@ -135,7 +138,12 @@ public final class CoordinatorCore {
         CompletableFuture.delayedExecutor(1500,TimeUnit.MILLISECONDS).execute(()-> {
             synchronized(stateLock) { if(pending.remove(request.actionId(),p)) {
                 Peer sender=peers.get(source);
-                if(sender!=null) sender.send(Wire.of("error","coordinator",source,Map.of("message","ray query timed out")).encode());
+                if(sender!=null) {
+                    Map<String,String> error=new HashMap<>();
+                    error.put("message","ray query timed out");
+                    if("use".equals(request.action())) error.put("fallbackAction",request.actionId());
+                    sender.send(Wire.of("error","coordinator",source,error).encode());
+                }
             }}
         });
     }

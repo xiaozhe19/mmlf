@@ -1,15 +1,16 @@
 package dev.mmlf.bridge.render;
 
-import dev.mmlf.bridge.Experiments;
+import dev.mmlf.bridge.platform.Experiments;
 import dev.mmlf.common.MmlfLog;
 import java.nio.ByteBuffer;
 import java.util.Locale;
 import java.util.Map;
 
 /**
- * Whether the submitting runtime still renders its own world. While the render host confirms it draws everything this
- * runtime submits ({@link OwnedSectionCompiler#hideNative()}), this runtime's world pass leaves out all of it, and what
- * remains in its frame is only content no generic path reaches (for example a mod drawing straight to the GPU). The
+ * Whether the submitting runtime still renders its own world. While the render host draws this runtime's submissions
+ * ({@link OwnedSectionCompiler#replayLive()}), this runtime's world pass leaves out each section and object the host
+ * draws ({@link #hides}), and what remains in its frame is only what could not be submitted (a section or entity that
+ * failed to record, a mod drawing straight to the GPU). The
  * exported depth of those frames tells whether anything remains: once nothing has for a while, the world pass is
  * skipped altogether (not while a hosted screen, the native hand or item icons need it), except for one probe frame
  * per second that brings the world pass back as soon as something appears. The composited frame is then only a fallback for such
@@ -28,7 +29,11 @@ public final class NativeWorld {
 
     /** Whether this runtime's own world pass leaves out what the render host draws: everything it submits, and the
      *  rest of its world, which the render host's own world already shows. Never while {@link DynamicCapture} runs. */
-    public static boolean hidden() { return Experiments.GEOMETRY_REPLAY && OwnedSectionCompiler.hideNative() && !DynamicCapture.capturing(); }
+    public static boolean hidden() { return Experiments.GEOMETRY_REPLAY && OwnedSectionCompiler.replayLive() && !DynamicCapture.capturing(); }
+    /** An entity left out of this runtime's world pass: the host draws it (its recorded copy, or its own world's). */
+    public static boolean hides(net.minecraft.world.entity.Entity entity) { return hidden() && (!DynamicCapture.owned(entity) || DynamicCapture.exported(entity)); }
+    /** The same for a block entity. */
+    public static boolean hides(net.minecraft.world.level.block.entity.BlockEntity blockEntity) { return hidden() && (!DynamicCapture.owned(blockEntity) || DynamicCapture.exported(blockEntity)); }
     /** Whether the world pass is currently being skipped. */
     public static boolean skipping() { return skipping; }
 
@@ -44,12 +49,12 @@ public final class NativeWorld {
     }
     /** Render thread, before each frame: whether this frame renders the world ({@code MinecraftMixin}). */
     public static boolean renderWorld(boolean requested) {
-        boolean hidden=Experiments.GEOMETRY_REPLAY && OwnedSectionCompiler.hideNative();
+        boolean hidden=Experiments.GEOMETRY_REPLAY && OwnedSectionCompiler.replayLive();
         long now=System.nanoTime();
         if(hidden!=wasHidden) { wasHidden=hidden; hiddenSince=lastResidual=now; cleanFrames=0; }
         // Icon and hosted-screen frames are drawn inside or over the world pass, so they keep it (held items are meshes).
         var mc=net.minecraft.client.Minecraft.getInstance();
-        boolean needed=mc.screen!=null || dev.mmlf.bridge.VisualLayers.iconsPending();
+        boolean needed=mc.screen!=null || dev.mmlf.bridge.render.VisualLayers.iconsPending();
         boolean skip=hidden && !MODE.equals("on") && !needed
             && (MODE.equals("off") || now-lastResidual>CLEAN_NANOS && cleanFrames>=CLEAN_FRAMES);
         boolean probe=false;

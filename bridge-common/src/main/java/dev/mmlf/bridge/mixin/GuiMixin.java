@@ -1,5 +1,5 @@
 package dev.mmlf.bridge.mixin;
-import dev.mmlf.bridge.SessionStatus;
+import dev.mmlf.bridge.transport.SessionStatus;
 import net.minecraft.client.DeltaTracker;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.Gui;

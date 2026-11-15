@@ -88,7 +88,7 @@ class VersionProfileTest {
   jar(mods.resolve("other.jar"),"META-INF/neoforge.mods.toml");
   jar(mods.resolve("fabric-only.jar"),"fabric.mod.json");
   assertThrows(IllegalStateException.class,()->ReleaseSupport.remoteMods(mods,"neoforge"));
-  jar(mods.resolve("mmlf-neoforge.jar"),"META-INF/neoforge.mods.toml","dev/mmlf/bridge/BridgeCore.class");
+  jar(mods.resolve("mmlf-neoforge.jar"),"META-INF/neoforge.mods.toml","dev/mmlf/bridge/BridgeEntry.class");
   var found=ReleaseSupport.remoteMods(mods,"neoforge");
   assertEquals(List.of("mmlf-neoforge.jar","other.jar"),found.stream().map(p->p.getFileName().toString()).toList());
   Path game=root.resolve("session/neoforge");

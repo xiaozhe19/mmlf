@@ -1,6 +1,6 @@
 package dev.mmlf.bridge.mixin;
 import com.mojang.blaze3d.platform.GlStateManager;
-import dev.mmlf.bridge.GuiHost;
+import dev.mmlf.bridge.collab.GuiHost;
 import org.lwjgl.opengl.GL11;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.injection.*;

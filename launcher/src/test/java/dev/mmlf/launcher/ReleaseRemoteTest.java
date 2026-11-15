@@ -61,7 +61,7 @@ class ReleaseRemoteTest {
         complete("neoforge-21.1.265");
         // Version-isolated instance: the NeoForge version's own folder holds its mods.
         Path instance=root.resolve("versions/neoforge-21.1.265");
-        jar(instance.resolve("mods/mmlf-neoforge.jar"),"META-INF/neoforge.mods.toml","dev/mmlf/bridge/BridgeCore.class");
+        jar(instance.resolve("mods/mmlf-neoforge.jar"),"META-INF/neoforge.mods.toml","dev/mmlf/bridge/BridgeEntry.class");
         jar(instance.resolve("mods/farmersdelight.jar"),"META-INF/neoforge.mods.toml");
         jar(instance.resolve("mods/sodium-fabric.jar"),"fabric.mod.json");
         Path gameDirectory=root.resolve("versions/fabric-loader-0.16.10-1.21.1");
@@ -107,7 +107,7 @@ class ReleaseRemoteTest {
     @Test void fabricRemote() throws Exception {
         install("1.21.1",VANILLA); install("fabric-loader-0.16.10-1.21.1",FABRIC);
         complete("fabric-loader-0.16.10-1.21.1");
-        jar(root.resolve("mods/mmlf-fabric.jar"),"fabric.mod.json","dev/mmlf/bridge/BridgeCore.class");
+        jar(root.resolve("mods/mmlf-fabric.jar"),"fabric.mod.json","dev/mmlf/bridge/BridgeEntry.class");
         Path gameDirectory=root.resolve("neoforge-game");
         var prepared=ReleaseRemote.prepare(root,"neoforge","1.21.1",gameDirectory,(f,t)->{});
         assertEquals(root,prepared.instance(),"no isolated mods folder: the shared instance");

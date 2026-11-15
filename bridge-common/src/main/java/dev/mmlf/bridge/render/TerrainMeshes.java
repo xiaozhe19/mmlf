@@ -1,6 +1,5 @@
 package dev.mmlf.bridge.render;
 
-import dev.mmlf.bridge.StandInBlock;
 import dev.mmlf.common.RenderSectionStore;
 import dev.mmlf.common.TerrainQuadPartition;
 import java.nio.*;
@@ -45,6 +44,7 @@ public final class TerrainMeshes {
     }
     static void refresh(Minecraft mc,RenderSectionStore.Snapshot snapshot,int width,int height) {
         if(!TerrainModels.enabled() || snapshot==null) return;
+        confirmPredictions(mc);
         Set<Long> only=null;
         if(dirty) { dirty=false; dirtySections.clear(); }
         else {
@@ -77,7 +77,7 @@ public final class TerrainMeshes {
      */
     public static float[] particleBounds(ClientLevel level,BlockPos pos) {
         for(BlockPos at:new BlockPos[]{pos,pos.below()}) {
-            if(!StandInBlock.is(level.getBlockState(at))) continue;
+            if(!dev.mmlf.bridge.collab.RenderInputs.isStandIn(level.getBlockState(at))) continue;
             BakedQuad chosen=null;
             for(var quads:at(at).values()) for(BakedQuad quad:quads) if(chosen==null || quad.getDirection()==Direction.UP && chosen.getDirection()!=Direction.UP) chosen=quad;
             if(chosen==null) return null;
@@ -132,6 +132,11 @@ public final class TerrainMeshes {
         if(selected!=null) { next.putAll(previous.sections()); next.keySet().removeAll(selected); }
         var changed=new HashSet<Long>();
         int reused=0;
+        net.minecraft.world.phys.Vec3 camera=mc.gameRenderer.getMainCamera().getPosition();
+        var predicted=new ArrayList<BlockPos>();
+        // A few sections changing is a block placed or broken; a full rebuild or a batch predicts no removals.
+        boolean incremental=selected!=null && selected.size()<=URGENT_SECTIONS;
+        var vanished=new ArrayList<BlockPos>();
         for(var entry:grouped.entrySet()) {
             long key=entry.getKey(); int sx=SectionPos.x(key),sy=SectionPos.y(key),sz=SectionPos.z(key);
             if(!level.hasChunk(sx,sz)) continue;
@@ -139,10 +144,12 @@ public final class TerrainMeshes {
             var occupied=new ArrayList<TerrainQuadPartition.Cell>();
             var pos=new BlockPos.MutableBlockPos();
             for(int y=0;y<16;y++) for(int z=0;z<16;z++) for(int x=0;x<16;x++)
-                if(StandInBlock.is(level.getBlockState(pos.set(ox+x,oy+y,oz+z)))) occupied.add(new TerrainQuadPartition.Cell(x,y,z));
-            if(occupied.isEmpty()) continue;
+                if(dev.mmlf.bridge.collab.RenderInputs.isStandIn(level.getBlockState(pos.set(ox+x,oy+y,oz+z)))) occupied.add(new TerrainQuadPartition.Cell(x,y,z));
             var layers=entry.getValue();
             Section old=previous.sections().get(key);
+            predict(level,camera,ox,oy,oz,layers,old,occupied,predicted);
+            if(incremental) predictRemoved(level,ox,oy,oz,layers,old,occupied,vanished);
+            if(occupied.isEmpty()) continue;
             if(old!=null && old.atlas().equals(atlasKey) && old.occupied().equals(occupied) && RenderSectionStore.sameLayers(old.layers(),layers)) {
                 next.put(key,old); reused++; continue;
             }
@@ -165,6 +172,9 @@ public final class TerrainMeshes {
         }
         var removed=new HashSet<>(previous.sections().keySet()); removed.removeAll(next.keySet());
         if(selected!=null) removed.retainAll(selected);
+        // A section whose last remote block went has no geometry left at all.
+        if(incremental) for(long key:removed) if(!grouped.containsKey(key))
+            predictRemoved(level,SectionPos.x(key)*16,SectionPos.y(key)*16,SectionPos.z(key)*16,List.of(),previous.sections().get(key),new ArrayList<>(),vanished);
         if(changed.isEmpty() && removed.isEmpty()) return true;
         state=new State(version,Map.copyOf(next));
         for(long key:removed) uploaded.remove(key);
@@ -172,9 +182,148 @@ public final class TerrainMeshes {
         dev.mmlf.common.MmlfLog.sampled("render.submission","terrain_meshes",1000,Map.of("sections",next.size(),"cells",cells,"version",version,"partial",selected!=null,
                 "considered",grouped.size(),"changed",changed.size(),"removed",removed.size(),"reused",reused,"rebuildMicros",(System.nanoTime()-started)/1000));
         var dirty=new HashSet<>(removed); dirty.addAll(changed);
-        for(long key:dirty) mc.levelRenderer.setSectionDirty(SectionPos.x(key),SectionPos.y(key),SectionPos.z(key));
+        // A few sections changed (a block placed or broken, not a batch arriving): compiled before the next frame when
+        // near the camera, as vanilla does for the player's own changes, instead of some frames later on a worker.
+        boolean urgent=selected!=null && dirty.size()<=URGENT_SECTIONS;
+        for(long key:dirty) {
+            int x=SectionPos.x(key),y=SectionPos.y(key),z=SectionPos.z(key);
+            boolean near=urgent && camera.distanceToSqr(x*16+8,y*16+8,z*16+8)<NEAR_SQR;
+            if(near) ((dev.mmlf.bridge.mixin.LevelRendererInvoker)mc.levelRenderer).mmlf$setSectionDirty(x,y,z,true);
+            else mc.levelRenderer.setSectionDirty(x,y,z);
+        }
+        placePredicted(level,predicted);
+        placeRemoved(level,vanished);
         return true;
     }
+
+    // ---- render stand-ins: what shows a remote block is its geometry, on every renderer ----
+
+    /** Within this distance a predicted stand-in is compiled before the next frame, as vanilla's own placements are. */
+    private static final double IMMEDIATE_RANGE_SQR=24*24;
+    /** A predicted stand-in the primary's server has not confirmed by then is replaced by what the server holds. */
+    private static final long PREDICT_CONFIRM_NANOS=1_000_000_000L;
+    /** {@code removal}: a stand-in taken out ahead of the server, else one put in. */
+    private record Prediction(BlockPos pos,String dimension,long nanos,boolean removal) {}
+    private static final List<Prediction> predictions=new ArrayList<>();
+    /**
+     * Whether a remote block shows depends on its geometry alone; the server's stand-in is there for collision, light
+     * and the other runtimes' logic. A block another runtime has just placed arrives here as geometry before its
+     * stand-in arrives through the primary's server (the owner's report, the primary's check, the block update): the
+     * client world still has air there, and renderers (vanilla, Sodium, shader packs) only compile blocks, so the
+     * client world takes a stand-in there at once, drawn as any other through {@link TerrainModels}, wherever it is
+     * in the loaded area. Only cells new in this section's geometry: a cell that was already there and is now air is
+     * a block being removed. The server's stand-in replaces the prediction when it comes; one it never confirms is
+     * undone ({@link #confirmPredictions}).
+     */
+    private static void predict(ClientLevel level,net.minecraft.world.phys.Vec3 camera,int ox,int oy,int oz,List<RenderSectionStore.Layer> layers,
+                                Section old,List<TerrainQuadPartition.Cell> occupied,List<BlockPos> predicted) {
+        var cells=new HashSet<TerrainQuadPartition.Cell>();
+        try { for(var layer:layers) cells.addAll(TerrainQuadPartition.cellsOf(layer.vertices())); }
+        catch(IllegalArgumentException e) { return; }
+        boolean added=false;
+        var pos=new BlockPos.MutableBlockPos();
+        for(var cell:cells) {
+            pos.set(ox+cell.x(),oy+cell.y(),oz+cell.z());
+            if(old!=null && old.cells().containsKey(pos.asLong())) continue;
+            if(!level.getBlockState(pos).isAir() || occupied.contains(cell)) continue;
+            occupied.add(cell); predicted.add(pos.immutable()); added=true;
+        }
+        // The order the stand-in scan gives, so the section compares equal once the predicted cells are stand-ins.
+        if(added) occupied.sort(Comparator.comparingInt(TerrainQuadPartition.Cell::y).thenComparingInt(TerrainQuadPartition.Cell::z).thenComparingInt(TerrainQuadPartition.Cell::x));
+    }
+    private static void placePredicted(ClientLevel level,List<BlockPos> predicted) {
+        if(predicted.isEmpty()) return;
+        String dimension=level.dimension().location().toString();
+        long now=System.nanoTime();
+        var camera=Minecraft.getInstance().gameRenderer.getMainCamera().getPosition();
+        for(BlockPos at:predicted) {
+            if(!level.getBlockState(at).isAir()) continue;
+            var standIn=dev.mmlf.bridge.collab.RenderInputs.reportedStandIn(dimension,at);
+            // Not reported yet: occluding nothing until the owner's report says otherwise. A guessed solid stand-in
+            // would cull the faces next to it (the top of the block below a remote block just placed, or below the part
+            // of a model reaching into a neighbouring cell, such as a sliding door's panel) with nothing drawn there.
+            if(standIn==null) standIn=dev.mmlf.bridge.collab.RenderInputs.standIn(false,0);
+            if(standIn==null) return; // not registered
+            // Near the player as a predicted placement, compiled before the next frame; farther away on the workers.
+            boolean near=camera.distanceToSqr(at.getX()+.5,at.getY()+.5,at.getZ()+.5)<IMMEDIATE_RANGE_SQR;
+            level.setBlock(at,standIn,near ? net.minecraft.world.level.block.Block.UPDATE_ALL_IMMEDIATE : net.minecraft.world.level.block.Block.UPDATE_CLIENTS);
+            predictions.add(new Prediction(at,dimension,now,false));
+        }
+        dev.mmlf.common.MmlfLog.sampled("render.submission","terrain_predicted",1000,Map.of("cells",predicted.size(),"waiting",predictions.size()));
+    }
+    /**
+     * The other direction: a remote block that had faces in this section's geometry has none now, and the client world
+     * still holds its stand-in. The stand-in shows nothing any more but still occludes, so the faces of the blocks next
+     * to it (the primary's block below a broken remote one) stay culled until the owner's report, the primary's check
+     * and the block update have gone through. The client world takes air there at once; one the server does not
+     * confirm is undone ({@link #confirmPredictions}). Cells without faces before (enclosed blocks) are never touched.
+     */
+    private static void predictRemoved(ClientLevel level,int ox,int oy,int oz,List<RenderSectionStore.Layer> layers,
+                                       Section old,List<TerrainQuadPartition.Cell> occupied,List<BlockPos> vanished) {
+        if(old==null || old.cells().isEmpty()) return;
+        var cells=new HashSet<TerrainQuadPartition.Cell>();
+        try { for(var layer:layers) cells.addAll(TerrainQuadPartition.cellsOf(layer.vertices())); }
+        catch(IllegalArgumentException e) { return; }
+        var pos=new BlockPos.MutableBlockPos();
+        for(long packed:old.cells().keySet()) {
+            pos.set(packed);
+            var cell=new TerrainQuadPartition.Cell(pos.getX()-ox,pos.getY()-oy,pos.getZ()-oz);
+            if(cells.contains(cell) || !dev.mmlf.bridge.collab.RenderInputs.isStandIn(level.getBlockState(pos))) continue;
+            occupied.remove(cell); vanished.add(pos.immutable());
+        }
+    }
+    private static void placeRemoved(ClientLevel level,List<BlockPos> vanished) {
+        if(vanished.isEmpty()) return;
+        String dimension=level.dimension().location().toString();
+        long now=System.nanoTime();
+        var camera=Minecraft.getInstance().gameRenderer.getMainCamera().getPosition();
+        var air=net.minecraft.world.level.block.Blocks.AIR.defaultBlockState();
+        for(BlockPos at:vanished) {
+            boolean near=camera.distanceToSqr(at.getX()+.5,at.getY()+.5,at.getZ()+.5)<IMMEDIATE_RANGE_SQR;
+            level.setBlock(at,air,near ? net.minecraft.world.level.block.Block.UPDATE_ALL_IMMEDIATE : net.minecraft.world.level.block.Block.UPDATE_CLIENTS);
+            predictions.add(new Prediction(at,dimension,now,true));
+        }
+        dev.mmlf.common.MmlfLog.sampled("render.submission","terrain_removal_predicted",1000,Map.of("cells",vanished.size(),"waiting",predictions.size()));
+    }
+    /**
+     * Render thread: predictions older than {@link #PREDICT_CONFIRM_NANOS} are checked against the primary's server,
+     * in this JVM; where it holds no stand-in, it sends the client what it holds, which undoes the prediction.
+     */
+    static void confirmPredictions(Minecraft mc) {
+        if(predictions.isEmpty()) return;
+        long now=System.nanoTime();
+        var server=mc.getSingleplayerServer();
+        var due=new ArrayList<Prediction>();
+        for(var it=predictions.iterator();it.hasNext();) {
+            Prediction p=it.next();
+            if(now-p.nanos()<PREDICT_CONFIRM_NANOS) continue;
+            it.remove();
+            if(server==null || mc.level==null) continue;
+            // Still as predicted here: the server is asked whether it agrees.
+            boolean standIn=dev.mmlf.bridge.collab.RenderInputs.isStandIn(mc.level.getBlockState(p.pos()));
+            if(p.removal() ? mc.level.getBlockState(p.pos()).isAir() : standIn) due.add(p);
+        }
+        if(due.isEmpty()) return;
+        // One server task for all of them.
+        server.execute(()->{
+            int undone=0;
+            for(Prediction p:due) {
+                var level=dev.mmlf.bridge.collab.RenderInputs.serverLevel(server,p.dimension());
+                if(level==null || !level.isLoaded(p.pos())) continue;
+                // Agreed: a placement it holds a stand-in for, a removal it holds none for.
+                if(dev.mmlf.bridge.collab.RenderInputs.isStandIn(level.getBlockState(p.pos()))!=p.removal()) continue;
+                level.getChunkSource().blockChanged(p.pos());
+                undone++;
+            }
+            if(undone>0) dev.mmlf.common.MmlfLog.info("render.submission","terrain_prediction_undone",Map.of("cells",undone,"checked",due.size()));
+        });
+    }
+    /** The host left its world: predictions of it are dropped (the client world they were made in is gone). */
+    public static void forgetPredictions() { predictions.clear(); }
+    /** At most this many changed sections count as one change the player is waiting to see. */
+    private static final int URGENT_SECTIONS=8;
+    /** Vanilla's distance (squared, camera to section centre) within which a player's change compiles at once. */
+    private static final double NEAR_SQR=768;
     private static BakedQuad convert(byte[] bytes,TerrainQuadPartition.Cell cell,TextureAtlasSprite sprite,int width,int height) {
         var in=ByteBuffer.wrap(bytes).order(ByteOrder.LITTLE_ENDIAN);
         int[] data=new int[32];

@@ -1,5 +1,5 @@
 package dev.mmlf.bridge.mixin;
-import dev.mmlf.bridge.InventoryBridge;
+import dev.mmlf.bridge.collab.InventoryBridge;
 import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.inventory.Slot;
 import org.spongepowered.asm.mixin.Mixin;

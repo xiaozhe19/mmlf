@@ -41,7 +41,10 @@ public final class Messages {
      * of one {@link ObjectState} each; a newer one replaces the chunk's previous one, and one with no kinds removes it.
      * {@code positions[i]} are the positions of {@code kinds[i]}, packed by {@link #packInChunk}.
      */
-    public record ChunkBlocks(String owner, String dimension, int x, int z, List<BlockKind> kinds, int[][] positions) {
+    public record ChunkBlocks(String owner, String dimension, int x, int z, List<BlockKind> kinds, int[][] positions, long revision) {
+        public ChunkBlocks(String owner,String dimension,int x,int z,List<BlockKind> kinds,int[][] positions) {
+            this(owner,dimension,x,z,kinds,positions,0);
+        }
         public String chunkKey() { return dimension + "@" + x + "," + z; }
         public boolean empty() { return kinds == null || kinds.isEmpty(); }
     }
@@ -118,8 +121,10 @@ public final class Messages {
     /** Every entity {@code owner} currently owns near the player in {@code dimension}; each snapshot replaces the last. */
     public record Entities(String owner, String dimension, long sequence, List<EntityState> entities) {}
     /**
-     * Damage an owner's entity did to its copy of the one player. The primary owns the player, so the owner never applies
-     * it itself: the primary does, with knockback away from {@code fromX}/{@code fromZ}.
+     * Damage an owner's copy of the one player took: by one of the owner's entities ({@code attacker} set), or with no
+     * entity behind it (the owner's mods, its own effects: {@code attacker} null). The primary owns the player, so the
+     * owner never applies it itself: the primary does, as {@code damageType} (a damage type's registry name), with
+     * knockback away from {@code fromX}/{@code fromZ} for an entity's.
      */
     public record PlayerDamage(String attacker, String attackerType, String damageType, float amount, double fromX, double fromZ) {}
     /** Experience an owner's copy of the one player collected (orbs of its entities); the primary gives it to the player. */

@@ -1,6 +1,5 @@
 package dev.mmlf.bridge.render;
 
-import dev.mmlf.bridge.BridgeCore;
 import dev.mmlf.common.MmlfLog;
 import dev.mmlf.common.RenderInstanceCodec;
 import dev.mmlf.common.RenderInstanceStore;
@@ -39,8 +38,8 @@ public final class RenderInstanceChannel {
             if(snapshot.version()==exported || now-lastWrite<250) return;
             lastWrite=now;
             try {
-                byte[] bytes=RenderInstanceCodec.encode(new RenderInstanceCodec.Batch(BridgeCore.runtimeId(),mc.level.dimension().location().toString(),snapshot));
-                Path target=BridgeCore.session().root().resolve(BridgeCore.runtimeId()+".instances"),tmp=target.resolveSibling(target.getFileName()+".tmp");
+                byte[] bytes=RenderInstanceCodec.encode(new RenderInstanceCodec.Batch(dev.mmlf.bridge.transport.SessionLink.runtimeId(),mc.level.dimension().location().toString(),snapshot));
+                Path target=dev.mmlf.bridge.transport.SessionLink.session().root().resolve(dev.mmlf.bridge.transport.SessionLink.runtimeId()+".instances"),tmp=target.resolveSibling(target.getFileName()+".tmp");
                 Files.write(tmp,bytes); Files.move(tmp,target,StandardCopyOption.REPLACE_EXISTING,StandardCopyOption.ATOMIC_MOVE);
                 exported=snapshot.version();
                 MmlfLog.info("render.submission","instance_export",Map.of("instances",snapshot.instances().size(),"version",snapshot.version()));
@@ -48,7 +47,7 @@ public final class RenderInstanceChannel {
             return;
         }
         if(now-lastRead<100) return; lastRead=now;
-        Path path=BridgeCore.session().root().resolve(remoteRuntime+".instances");
+        Path path=dev.mmlf.bridge.transport.SessionLink.session().root().resolve(remoteRuntime+".instances");
         try {
             if(!Files.isRegularFile(path)) return;
             if(Files.size(path)>RenderInstanceCodec.MAX_BYTES) throw new IOException("instance snapshot too large");

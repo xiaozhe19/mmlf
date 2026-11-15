@@ -1,6 +1,6 @@
 package dev.mmlf.bridge.mixin;
 
-import dev.mmlf.bridge.StandInBlock;
+import dev.mmlf.bridge.collab.StandInBlock;
 import dev.mmlf.bridge.render.TerrainMeshes;
 import net.minecraft.client.multiplayer.ClientLevel;
 import net.minecraft.client.particle.Particle;

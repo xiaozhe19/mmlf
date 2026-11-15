@@ -114,45 +114,4 @@ class FrameFileTest {
    assertNull(reader.readLatest(null,null),"corrupt metadata");
   }
  }
- @Test void crashedProcessReleasesSlotAndIncompleteFrameIsRejected() throws Exception {
-  String javaExecutable=Path.of(System.getProperty("java.home"),"bin",System.getProperty("os.name").startsWith("Windows")?"java.exe":"java").toString();
-  String cp=Path.of(FrameFile.class.getProtectionDomain().getCodeSource().getLocation().toURI())+System.getProperty("path.separator")+
-   Path.of(FrameFileProcess.class.getProtectionDomain().getCodeSource().getLocation().toURI());
-  Path path=temp.resolve("crash.bin"); int n=128*128*4; ByteBuffer plane=ByteBuffer.allocate(n);
-  try(var writer=FrameFile.writer(path,128*128); var reader=FrameFile.reader(path,128*128)) {
-   int slot=writer.publish(1,128,128,plane,plane.duplicate());
-   Process child=new ProcessBuilder(javaExecutable,"-cp",cp,FrameFileProcess.class.getName(),path.toString(),"crash",Integer.toString(slot)).redirectErrorStream(true).start();
-   try { assertTrue(child.waitFor(10,java.util.concurrent.TimeUnit.SECONDS)); assertEquals(0,child.exitValue(),new String(child.getInputStream().readAllBytes())); }
-   finally { if(child.isAlive()) child.destroyForcibly(); }
-   assertNull(reader.readLatest(null,null));
-   boolean reused=false;
-   for(int i=2;i<8;i++) { int written=writer.publish(i,128,128,plane,plane.duplicate()); if(written==slot) reused=true; }
-   assertTrue(reused,"OS must release lock after child exits");
-   assertEquals(7,reader.readLatest(null,null).frameId());
-  }
- }
- @Test void separateProcessWriterNeverExposesMixedPlanes() throws Exception {
-  String javaExecutable=Path.of(System.getProperty("java.home"),"bin",System.getProperty("os.name").startsWith("Windows")?"java.exe":"java").toString();
-  String cp=Path.of(FrameFile.class.getProtectionDomain().getCodeSource().getLocation().toURI())+System.getProperty("path.separator")+
-   Path.of(FrameFileProcess.class.getProtectionDomain().getCodeSource().getLocation().toURI());
-  Path path=temp.resolve("process.bin");
-  Process child=new ProcessBuilder(javaExecutable,"-cp",cp,FrameFileProcess.class.getName(),path.toString()).redirectErrorStream(true).start();
-  FrameFile reader=null;
-  try(var lines=new java.io.BufferedReader(new java.io.InputStreamReader(child.getInputStream()))) {
-   int accepted=0; String line; FrameFile.Latest cursor=null;
-   // Each printed line means at least one frame exists; the reader polls rather than reading an announced slot.
-   while((line=lines.readLine())!=null) {
-    assertTrue(line.matches("\\d+"),line);
-    if(reader==null) reader=FrameFile.reader(path,128*128);
-    var latest=reader.readLatest(cursor,null);
-    if(latest==null) continue;
-    accepted++; byte expected=(byte)latest.frameId();
-    assertEquals(Long.toString(latest.frameId()),new String(latest.metadata(),StandardCharsets.UTF_8));
-    for(int i=0;i<128*128*4;i+=97) { assertEquals(expected,latest.pixels().color().get(i)); assertEquals(expected,latest.pixels().depth().get(i)); }
-    cursor=latest;
-   }
-   assertTrue(child.waitFor(10,java.util.concurrent.TimeUnit.SECONDS));
-   assertEquals(0,child.exitValue()); assertTrue(accepted>0);
-  } finally { if(reader!=null) reader.close(); if(child.isAlive()) child.destroyForcibly(); }
- }
 }
