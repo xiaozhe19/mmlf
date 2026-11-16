@@ -153,6 +153,8 @@ public final class SharedPlayer {
         catch(RuntimeException e) { MmlfLog.sampled("player","apply_failed",5000,Map.of("reason",e.toString())); return; }
         player.hurtMarked=false;
         state().baseline=new Baseline(new WeakReference<>(player),capture(player,player.getDeltaMovement(),vitals.version()));
+        // Contact with this runtime's blocks whose code the primary cannot run; reported with the tick's other changes.
+        StandInFeel.followerTick(player,vitals);
     }
 
     private static void backgroundEndOfTick(MinecraftServer server) {

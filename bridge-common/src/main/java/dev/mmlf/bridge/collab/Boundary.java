@@ -243,6 +243,7 @@ public final class Boundary {
         if(spec.light()>0) properties.put("_light",Integer.toString(spec.light()));
         if(!StandInSpec.NONE.equals(spec.fluid())) properties.put("_fluid",spec.fluid());
         if(spec.conductor()) properties.put("_conductor","true");
+        StandInFeel.describe(state,properties);
         if(object && ItemAccess.has(level,pos)) properties.put(CONTAINER,"true");
         return properties;
     }

@@ -173,7 +173,8 @@ public final class WorldFollow {
             // A scene sets up its own world (DemoScene).
             if(Worlds.scene()) return;
             var server=mc.getSingleplayerServer();
-            // Its weather and natural spawns would duplicate the primary's world. Difficulty follows the primary's
+            // Its weather would duplicate the primary's world; natural spawning starts off and then follows the primary's
+            // rule (PlayerFollower.followPlay), for this runtime's mods' mobs only (MobSpawning). Difficulty follows the primary's
             // (PlayerFollower.followPlay), so this runtime's own hostile mobs exist and hit as hard as there.
             server.execute(()->{
                 // Its spawn area is not kept loaded: those chunks wait for the primary's terrain, which it may not have.

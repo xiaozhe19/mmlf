@@ -55,8 +55,8 @@ public final class Occupancy {
     /** The open world's state; with none open, a throwaway one: what is written to it reaches no world. */
     private static State state() { var world=Worlds.current(); return world==null ? new State() : world.get(STATE); }
 
-    /** One reported position: the object's id (null for a plain block), its owner, the stand-in it takes, its collision boxes. */
-    record Entry(String id,String owner,BlockState state,VoxelShape collision,String stateName,long revision) {}
+    /** One reported position: the object's id (null for a plain block), its owner, the stand-in it takes, its collision boxes, how it feels ({@link StandInFeel}). */
+    record Entry(String id,String owner,BlockState state,VoxelShape collision,String stateName,long revision,StandInFeel.Feel feel) {}
     /** Per dimension, per chunk ({@link ChunkPos#toLong}), packed position to entry; a chunk's map is never changed once published. */
     /** Object id to where it is. */
     /** Chunks ("dimension@chunk") whose owner reported their plain blocks since it connected: its silence there then means "none". */
@@ -109,7 +109,7 @@ public final class Occupancy {
         var at=new Boundary.At(object.dimension(),new BlockPos(object.x(),object.y(),object.z()));
         if(previous!=null && !previous.equals(at)) set(previous,object.id(),null);
         state().positions.put(object.id(),at);
-        set(at,object.id(),new Entry(object.id(),object.owner(),standIn,collision(object.state().get("_collision")),object.state().get("_state"),object.revision()));
+        set(at,object.id(),new Entry(object.id(),object.owner(),standIn,collision(object.state().get("_collision")),object.state().get("_state"),object.revision(),StandInFeel.parse(object.state())));
     }
     private static void set(Boundary.At at,String id,Entry entry) {
         long key=at.pos().asLong();
@@ -129,7 +129,7 @@ public final class Occupancy {
             var kind=blocks.kinds().get(i);
             BlockState standIn=kind==null ? null : standIn(kind.state());
             if(standIn==null) continue;
-            Entry entry=new Entry(null,blocks.owner(),standIn,collision(kind.state().get("_collision")),kind.state().get("_state"),blocks.revision());
+            Entry entry=new Entry(null,blocks.owner(),standIn,collision(kind.state().get("_collision")),kind.state().get("_state"),blocks.revision(),StandInFeel.parse(kind.state()));
             for(int packed:blocks.positions()[i])
                 incoming.put(BlockPos.asLong(Messages.unpackX(blocks.x(),packed),Messages.unpackY(packed),Messages.unpackZ(blocks.z(),packed)),entry);
         }
@@ -298,16 +298,17 @@ public final class Occupancy {
     // ---- collision ----
 
     /** {@link StandInBlock}: the owner's collision boxes at the position, or null when unknown. */
-    static VoxelShape collision(BlockGetter getter,BlockPos pos) {
+    static VoxelShape collision(BlockGetter getter,BlockPos pos) { Entry entry=entry(getter,pos); return entry==null ? null : entry.collision(); }
+    /** What was reported at the position (any thread; the client's level reads the same map), or null. */
+    static Entry entry(BlockGetter getter,BlockPos pos) {
         if(state().reported.isEmpty()) return null;
         long key=pos.asLong(); long chunk=ChunkPos.asLong(pos.getX()>>4,pos.getZ()>>4);
         if(getter instanceof Level level) {
             var chunks=state().reported.get(level.dimension().location().toString()); var states=chunks==null ? null : chunks.get(chunk);
-            Entry entry=states==null ? null : states.get(key);
-            return entry==null ? null : entry.collision();
+            return states==null ? null : states.get(key);
         }
         // Region views (path finding, section copies) do not name their dimension.
-        for(var chunks:state().reported.values()) { var states=chunks.get(chunk); Entry entry=states==null ? null : states.get(key); if(entry!=null) return entry.collision(); }
+        for(var chunks:state().reported.values()) { var states=chunks.get(chunk); Entry entry=states==null ? null : states.get(key); if(entry!=null) return entry; }
         return null;
     }
     /** Parsed collision shapes, by their encoding: a chunk's plain blocks share a handful. */

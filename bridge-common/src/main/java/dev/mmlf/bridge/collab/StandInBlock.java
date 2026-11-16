@@ -103,6 +103,29 @@ public final class StandInBlock extends Block implements BucketPickup,LiquidBloc
     @Override protected void onPlace(BlockState state,net.minecraft.world.level.Level level,BlockPos pos,BlockState old,boolean moved) {
         if(!is(old) && level instanceof net.minecraft.server.level.ServerLevel server) PlainEndpoints.placed(server,pos);
     }
+    // ---- how it feels to what moves on it: the owner's block's, computed here (StandInFeel) ----
+    /** NeoForge's position-aware slipperiness ({@code IBlockExtension}); on Fabric, {@code StandInFrictionMixin} asks the same. */
+    public float getFriction(BlockState state,net.minecraft.world.level.LevelReader level,BlockPos pos,net.minecraft.world.entity.Entity entity) {
+        return StandInFeel.friction(level,pos);
+    }
+    @Override public void fallOn(net.minecraft.world.level.Level level,BlockState state,BlockPos pos,net.minecraft.world.entity.Entity entity,float fallDistance) {
+        BlockState archetype=StandInFeel.fall(level,pos);
+        if(archetype!=null) archetype.getBlock().fallOn(level,archetype,pos,entity,fallDistance);
+        // The owner's own fall code deals the fall on its copy of the player (StandInFeel.followerTick).
+        else if(!StandInFeel.fallCustom(level,pos)) super.fallOn(level,state,pos,entity,fallDistance);
+    }
+    @Override public void updateEntityAfterFallOn(BlockGetter level,net.minecraft.world.entity.Entity entity) {
+        BlockState archetype=StandInFeel.bounce(level,entity.getOnPosLegacy());
+        if(archetype!=null) archetype.getBlock().updateEntityAfterFallOn(level,entity); else super.updateEntityAfterFallOn(level,entity);
+    }
+    @Override public void stepOn(net.minecraft.world.level.Level level,BlockPos pos,BlockState state,net.minecraft.world.entity.Entity entity) {
+        BlockState archetype=StandInFeel.step(level,pos);
+        if(archetype!=null) archetype.getBlock().stepOn(level,pos,archetype,entity); else super.stepOn(level,pos,state,entity);
+    }
+    @Override protected void entityInside(BlockState state,net.minecraft.world.level.Level level,BlockPos pos,net.minecraft.world.entity.Entity entity) {
+        BlockState archetype=StandInFeel.inside(level,pos);
+        if(archetype!=null) archetype.entityInside(level,pos,entity);
+    }
     @Override public boolean canPlaceLiquid(Player player,BlockGetter level,BlockPos pos,BlockState state,Fluid fluid) { return false; }
     @Override public boolean placeLiquid(LevelAccessor level,BlockPos pos,BlockState state,FluidState fluid) { return false; }
     @Override public ItemStack pickupBlock(Player player,LevelAccessor level,BlockPos pos,BlockState state) { return ItemStack.EMPTY; }

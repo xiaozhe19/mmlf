@@ -54,6 +54,37 @@ public final class TerrainMeshes {
         }
         if(!TerrainAtlas.ready || !rebuild(mc,snapshot,width,height,only)) clear();
     }
+    /**
+     * Diagnosis (moire on remote glass): quads at the same corners twice in a section's received layers, which would
+     * fight for the same depth. Logged per section with the cells they fall in.
+     */
+    private static void reportDuplicates(int ox,int oy,int oz,List<RenderSectionStore.Layer> layers,List<TerrainQuadPartition.Cell> occupied) {
+        var seen=new HashMap<String,String>(); var where=new java.util.TreeSet<String>(); int duplicates=0;
+        for(var layer:layers) {
+            byte[] v=layer.vertices(); if(v.length%128!=0) continue;
+            var data=java.nio.ByteBuffer.wrap(v).order(java.nio.ByteOrder.LITTLE_ENDIAN);
+            for(int offset=0;offset<v.length;offset+=128) {
+                float[][] corners=new float[4][];
+                for(int i=0;i<4;i++) { int at=offset+i*32; corners[i]=new float[]{Math.round(data.getFloat(at)*1000)/1000f,Math.round(data.getFloat(at+4)*1000)/1000f,Math.round(data.getFloat(at+8)*1000)/1000f}; }
+                java.util.Arrays.sort(corners,(a,b)->a[0]!=b[0]?Float.compare(a[0],b[0]):a[1]!=b[1]?Float.compare(a[1],b[1]):Float.compare(a[2],b[2]));
+                String key=java.util.Arrays.deepToString(corners);
+                String before=seen.putIfAbsent(key,layer.renderType());
+                if(before!=null) {
+                    duplicates++;
+                    where.add((ox+(int)Math.floor(corners[0][0]))+","+(oy+(int)Math.floor(corners[0][1]))+","+(oz+(int)Math.floor(corners[0][2]))+" "+before+"/"+layer.renderType());
+                }
+            }
+        }
+        if(duplicates>0) dev.mmlf.common.MmlfLog.info("render.submission","terrain_duplicate_quads",Map.of("section",ox+","+oy+","+oz,"duplicates",duplicates,
+            "at",where.stream().limit(12).toList(),"layers",layers.stream().map(l->l.renderType()+":"+l.vertices().length/128).toList()));
+    }
+    /** Diagnosis (remote glass not blending): the layers each remote section arrives with, once per change. */
+    private static final Map<Long,String> reportedLayers=new java.util.concurrent.ConcurrentHashMap<>();
+    private static void reportLayers(long key,int ox,int oy,int oz,List<RenderSectionStore.Layer> layers) {
+        String summary=layers.stream().map(l->l.renderType()+":"+l.vertices().length/128).sorted().toList().toString();
+        if(summary.equals(reportedLayers.put(key,summary))) return;
+        dev.mmlf.common.MmlfLog.info("render.submission","terrain_layers",Map.of("section",ox+","+oy+","+oz,"layers",summary));
+    }
     public static Map<String,List<BakedQuad>> at(BlockPos pos) {
         Section section=state.sections().get(SectionPos.asLong(SectionPos.blockToSectionCoord(pos.getX()),SectionPos.blockToSectionCoord(pos.getY()),SectionPos.blockToSectionCoord(pos.getZ())));
         return section==null ? Map.of() : section.cells().getOrDefault(pos.asLong(),Map.of());
@@ -165,6 +196,8 @@ public final class TerrainMeshes {
                     for(byte[] quad:e.getValue()) quads.add(convert(quad,c,sprite,width,height));
                 }
             } catch(IllegalArgumentException e) { continue; }
+            reportDuplicates(ox,oy,oz,layers,occupied);
+            reportLayers(key,ox,oy,oz,layers);
             var frozen=new HashMap<Long,Map<String,List<BakedQuad>>>();
             local.forEach((block,passes)->{ var p=new HashMap<String,List<BakedQuad>>(); passes.forEach((pass,quads)->p.put(pass,List.copyOf(quads))); frozen.put(block,Map.copyOf(p)); });
             next.put(key,new Section(List.copyOf(layers),List.copyOf(occupied),atlasKey,Map.copyOf(frozen),version));

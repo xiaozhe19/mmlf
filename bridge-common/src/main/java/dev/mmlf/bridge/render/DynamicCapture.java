@@ -253,7 +253,10 @@ public final class DynamicCapture {
     }
     private static String name(RenderType type) {
         String name=((dev.mmlf.bridge.mixin.RenderStateShardAccessor)type).mmlf$name();
-        return name==null || name.isBlank() ? type.toString() : name;
+        if(name==null || name.isBlank()) return type.toString();
+        // The beacon beam's two layers share one name: the outer one blends and writes no depth.
+        if(name.equals("beacon_beam") && type.toString().contains("translucent_transparency")) return "beacon_beam_translucent";
+        return name;
     }
     /** The texture a render type binds, found by setting its state once; empty for untextured types. */
     private static String textureKey(RenderType type) {

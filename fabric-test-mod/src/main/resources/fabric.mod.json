@@ -6,6 +6,9 @@
   "entrypoints": {
     "main": [
       "dev.mmlf.fabrictest.FabricTestMod"
+    ],
+    "client": [
+      "dev.mmlf.fabrictest.FabricTestClient"
     ]
   },
   "depends": {

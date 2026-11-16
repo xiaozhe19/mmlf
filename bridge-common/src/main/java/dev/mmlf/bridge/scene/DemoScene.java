@@ -82,8 +82,10 @@ public final class DemoScene {
   var found=level.getEntities((net.minecraft.world.entity.Entity)null,area,e->e.getTags().contains(tag));
   net.minecraft.world.entity.Entity entity=found.isEmpty()?null:found.getFirst();
   if(entity==null) {
-   var type=net.minecraft.world.entity.EntityType.byString(item.type()).orElse(null);
-   if(type==null) { MmlfLog.warn("scene","scene_entity_unknown",Map.of("type",item.type())); return; }
+   // Like a block, the type may name {primary} or {background} (e.g. a test mod's mob of the background's loader).
+   String typeId=item.type().replace("{primary}",sceneSession.primary()).replace("{background}",background(sceneSession));
+   var type=net.minecraft.world.entity.EntityType.byString(typeId).orElse(null);
+   if(type==null) { MmlfLog.warn("scene","scene_entity_unknown",Map.of("type",typeId)); return; }
    entity=type.create(level);
    if(entity==null) return;
    entity.moveTo(item.x(),item.y(),item.z(),item.yaw(),0);

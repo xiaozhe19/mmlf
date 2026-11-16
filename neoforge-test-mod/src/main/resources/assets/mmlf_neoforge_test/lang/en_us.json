@@ -1,5 +1,14 @@
 {
   "block.mmlf_neoforge_test.demo_block": "MMLF Neoforge Demo Block",
   "block.mmlf_neoforge_test.gui_block": "MMLF Test Screen Block",
-  "block.mmlf_neoforge_test.box_block": "MMLF Test Box"
+  "block.mmlf_neoforge_test.box_block": "MMLF Test Box",
+  "block.mmlf_neoforge_test.slippery_block": "MMLF NeoForge Slippery",
+  "block.mmlf_neoforge_test.slow_block": "MMLF NeoForge Slow",
+  "block.mmlf_neoforge_test.bouncy_block": "MMLF NeoForge Bouncy (slime subclass)",
+  "block.mmlf_neoforge_test.springy_block": "MMLF NeoForge Springy (custom code)",
+  "block.mmlf_neoforge_test.chime_block": "MMLF NeoForge Chime (own sounds)",
+  "block.mmlf_neoforge_test.sticky_block": "MMLF NeoForge Sticky (custom code)",
+  "entity.mmlf_neoforge_test.test_cow": "MMLF NeoForge Cow",
+  "entity.mmlf_neoforge_test.test_zombie": "MMLF NeoForge Zombie",
+  "subtitles.mmlf_neoforge_test.chime": "MMLF NeoForge chime"
 }

@@ -57,12 +57,13 @@ public final class PlayerFollower {
         boolean paused=mc.isPaused() && !(mc.screen instanceof RemoteWaitScreen);
         var server=mc.getSingleplayerServer();
         String difficulty=server==null?"":server.getWorldData().getDifficulty().getKey();
-        String key=paused+"|"+mc.options.renderDistance().get()+"|"+mc.options.simulationDistance().get()+"|"+difficulty;
+        boolean spawning=server!=null && server.overworld().getGameRules().getBoolean(net.minecraft.world.level.GameRules.RULE_DOMOBSPAWNING);
+        String key=paused+"|"+mc.options.renderDistance().get()+"|"+mc.options.simulationDistance().get()+"|"+difficulty+"|"+spawning;
         long now=System.nanoTime();
         if(key.equals(lastPlay) && now-playSent<2_000_000_000L) return;
         lastPlay=key; playSent=now;
         SessionLink.sendReliable("event","*",new Event("mmlf:play",Map.of("paused",Boolean.toString(paused),"renderDistance",Integer.toString(mc.options.renderDistance().get()),
-            "simulationDistance",Integer.toString(mc.options.simulationDistance().get()),"difficulty",difficulty)));
+            "simulationDistance",Integer.toString(mc.options.simulationDistance().get()),"difficulty",difficulty,"mobSpawning",Boolean.toString(spawning))));
     }
     static String lastPlay="";
     static long playSent;
@@ -91,6 +92,14 @@ public final class PlayerFollower {
                 if(server.getWorldData().getDifficulty()==difficulty) return;
                 server.setDifficulty(difficulty,true);
                 MmlfLog.info("connection","difficulty_follow",Map.of("difficulty",difficulty.getKey()));
+            });
+            // Natural spawning follows the primary's rule: this runtime spawns its mods' share of the world (MobSpawning).
+            boolean spawning=MobSpawning.ENABLED && Boolean.parseBoolean(values.get("mobSpawning"));
+            if(server!=null && values.containsKey("mobSpawning") && Worlds.followsSave() && WorldFollow.following()) server.execute(()->{
+                var rule=server.overworld().getGameRules().getRule(net.minecraft.world.level.GameRules.RULE_DOMOBSPAWNING);
+                if(rule.get()==spawning) return;
+                rule.set(spawning,server);
+                MmlfLog.info("spawn","spawning_follow",Map.of("mobSpawning",spawning));
             });
         });
     }

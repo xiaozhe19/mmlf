@@ -24,6 +24,7 @@ import net.minecraft.world.level.LightLayer;
 import net.minecraft.world.level.block.Block;
 import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.level.chunk.LevelChunk;
+import net.minecraft.world.level.levelgen.Heightmap;
 import net.minecraft.world.phys.shapes.Shapes;
 import net.minecraft.world.phys.shapes.VoxelShape;
 
@@ -109,6 +110,7 @@ public final class SharedWorld {
         view.put("blockIn",(Function<String,LongToIntFunction>)SharedWorld::primaryBlockIn);
         view.put("covers",(Function<String,LongPredicate>)SharedWorld::primaryCovers);
         view.put("biomesIn",(Function<String,LongFunction<String[]>>)SharedWorld::primaryBiomesIn);
+        view.put("heightIn",(Function<String,LongToIntFunction>)SharedWorld::primaryHeightIn);
         view.put("write",(java.util.function.Consumer<String[]>)SharedWorld::primaryWrite);
         view.put("ready",(Supplier<Boolean>)()->{ long since=state().readySince; return since!=0 && System.nanoTime()-since>=READY_NANOS; });
         InJvm.registry().put(key(identity),Map.copyOf(view));
@@ -178,6 +180,43 @@ public final class SharedWorld {
             Snapshot snapshot=state().snapshots.get(dimension+"@"+x+","+z);
             return snapshot==null || snapshot.biomes()==null?null:snapshot.biomes();
         };
+    }
+    private static final int NO_HEIGHT=Integer.MIN_VALUE;
+    /**
+     * A column's height as {@code ChunkAccess.getHeight} answers it (the topmost block the heightmap type counts), by
+     * {@code BlockPos.asLong(x, type ordinal, z)}; {@link #NO_HEIGHT} where neither the client world nor a held copy
+     * has the chunk. The client world keeps the heightmaps it is sent (world surface, motion blocking); any other type
+     * is found below the world surface, without priming (writing) one in the client's chunk from this thread.
+     */
+    private static LongToIntFunction primaryHeightIn(String dimension) {
+        return packed->{
+            int x=BlockPos.getX(packed),z=BlockPos.getZ(packed),t=BlockPos.getY(packed);
+            var types=Heightmap.Types.values(); if(t<0 || t>=types.length) return NO_HEIGHT;
+            Heightmap.Types type=types[t];
+            var level=Minecraft.getInstance().level;
+            if(clientDimension(level,dimension) && level.getChunkSource().getChunk(x>>4,z>>4,net.minecraft.world.level.chunk.status.ChunkStatus.FULL,false) instanceof LevelChunk chunk) {
+                if(chunk.hasPrimedHeightmap(type)) return chunk.getHeight(type,x,z);
+                if(!chunk.hasPrimedHeightmap(Heightmap.Types.WORLD_SURFACE)) return NO_HEIGHT;
+                var pos=new BlockPos.MutableBlockPos(x,0,z);
+                for(int y=chunk.getHeight(Heightmap.Types.WORLD_SURFACE,x,z);y>=level.getMinBuildHeight();y--)
+                    if(type.isOpaque().test(chunk.getBlockState(pos.setY(y)))) return y;
+                return level.getMinBuildHeight()-1;
+            }
+            return snapshotHeight(dimension,x,z,type);
+        };
+    }
+    private static int snapshotHeight(String dimension,int x,int z,Heightmap.Types type) {
+        if(state().snapshots.isEmpty()) return NO_HEIGHT;
+        Snapshot snapshot=state().snapshots.get(dimension+"@"+(x>>4)+","+(z>>4)); if(snapshot==null) return NO_HEIGHT;
+        int[][] sections=snapshot.sections();
+        for(int i=sections.length-1;i>=0;i--) {
+            int[] ids=sections[i]; if(ids==null) continue;
+            for(int y=15;y>=0;y--) {
+                BlockState state=Block.BLOCK_STATE_REGISTRY.byId(ids[(y<<8)|((z&15)<<4)|(x&15)]);
+                if(state!=null && type.isOpaque().test(state)) return ((snapshot.minSection()+i)<<4)+y;
+            }
+        }
+        return (snapshot.minSection()<<4)-1;
     }
     private static String[] biomeNames(net.minecraft.world.level.chunk.LevelChunkSection[] sections) {
         String[] out=new String[1+sections.length*64];
@@ -296,10 +335,12 @@ public final class SharedWorld {
     // ---- other runtime: reading ----
 
     private record View(LongToIntFunction block,IntFunction<String> name,IntFunction<double[]> shape,IntFunction<Integer> emission,LongToIntFunction light,Supplier<String> dimension,java.util.function.Consumer<String[]> write,Supplier<Boolean> ready,
-                        Function<String,LongToIntFunction> blockIn,Function<String,LongPredicate> covers,Function<String,LongFunction<String[]>> biomesIn) {}
+                        Function<String,LongToIntFunction> blockIn,Function<String,LongPredicate> covers,Function<String,LongFunction<String[]>> biomesIn,
+                        Function<String,LongToIntFunction> heightIn) {}
     /** The attached view's per-dimension answers, by dimension. */
     private static final Map<String,LongToIntFunction> blockIn=new ConcurrentHashMap<>();
     private static final Map<String,LongPredicate> covers=new ConcurrentHashMap<>();
+    private static final Map<String,LongToIntFunction> heightIn=new ConcurrentHashMap<>();
     /** The primary's functions once found, and the same while the primary's map is ready to be read (else null). */
     private static volatile View attached, view;
     private static volatile String primaryDimension;
@@ -331,8 +372,8 @@ public final class SharedWorld {
                         (IntFunction<Integer>)m.get("emission"),(LongToIntFunction)m.get("light"),(Supplier<String>)m.get("dimension"),
                         (java.util.function.Consumer<String[]>)m.get("write"),(Supplier<Boolean>)m.get("ready"),
                         (Function<String,LongToIntFunction>)m.get("blockIn"),(Function<String,LongPredicate>)m.get("covers"),
-                        (Function<String,LongFunction<String[]>>)m.get("biomesIn"));
-                    blockIn.clear(); covers.clear();
+                        (Function<String,LongFunction<String[]>>)m.get("biomesIn"),(Function<String,LongToIntFunction>)m.get("heightIn"));
+                    blockIn.clear(); covers.clear(); heightIn.clear();
                     attached=v;
                     InJvm.registry().put("interest:"+SessionLink.session().identity(),(Supplier<String[]>)SharedWorld::interestKeys);
                     MmlfLog.info("world","shared_world_attached",Map.of());
@@ -377,7 +418,7 @@ public final class SharedWorld {
         var server=Minecraft.getInstance().getSingleplayerServer();
         Runnable biomes=()->{ state().biomesPending.clear(); state().biomesQueued.clear(); };
         if(server!=null) server.execute(biomes); else biomes.run();
-        attached=view=null; primaryDimension=null; states=new BlockState[0]; shapes.clear(); state().pending.clear(); blockIn.clear(); covers.clear(); }
+        attached=view=null; primaryDimension=null; states=new BlockState[0]; shapes.clear(); state().pending.clear(); blockIn.clear(); covers.clear(); heightIn.clear(); }
 
     /**
      * Other runtime, server thread: one of its own things starts acting ({@code authored}) or something that is not
@@ -566,6 +607,25 @@ public final class SharedWorld {
     /** Whether this runtime's own block stands there: its mods' blocks and the vanilla blocks it owns. */
     private static boolean own(Level level,BlockState state,BlockPos pos) {
         return !state.isAir() && (!BuiltInRegistries.BLOCK.getKey(state.getBlock()).getNamespace().equals("minecraft") || Ownership.ownsVanilla(level,pos));
+    }
+
+    /**
+     * {@code ChunkHeightMixin}, a hollow world's server chunk: the column's height in the shared map, read live from the
+     * primary's world. The chunk's own heightmaps know only what its own storage held: nothing but its own blocks in a
+     * hollow chunk (primed on an empty chunk without co-generation), or the primary's terrain as co-generation copied
+     * it, which goes stale. Natural spawning picks its heights from them, so without this a background's mobs were
+     * tried only near the bottom of the world. The primary's heightmaps already count this runtime's blocks (they stand
+     * there as stand-ins), so its answer is the whole map's; the chunk's own is used only where the primary has none.
+     */
+    public static int height(LevelChunk chunk,Heightmap.Types type,int x,int z,int own) {
+        View v=view; if(v==null || v.heightIn()==null || !hollow()) return own;
+        Level level=chunk.getLevel(); if(level==null || level.isClientSide()) return own;
+        int primary;
+        try {
+            long packed=BlockPos.asLong(chunk.getPos().getMinBlockX()+(x&15),type.ordinal(),chunk.getPos().getMinBlockZ()+(z&15));
+            primary=heightIn.computeIfAbsent(level.dimension().location().toString(),v.heightIn()).applyAsInt(packed);
+        } catch(RuntimeException e) { return own; }
+        return primary==NO_HEIGHT ? own : primary;
     }
 
     /** {@code LevelChunkMixin}, other runtime: its own block, or the primary's map. */

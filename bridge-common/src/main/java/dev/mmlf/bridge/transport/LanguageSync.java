@@ -22,7 +22,6 @@ public final class LanguageSync {
     private static volatile java.util.function.Consumer<String> languageChanged=primary->{};
     public static void onLanguageChanged(java.util.function.Consumer<String> hook) { languageChanged=hook; }
     private LanguageSync() {}
-    static boolean languageReloading;
     public static boolean initialLanguageReceived, initialLanguageWaitReported;
     static long initialLanguageWaitStarted, nextLanguageAnnouncement;
     /** Do not enter the far world in the middle of the first language reload; old peers get a bounded fallback. */
@@ -49,26 +48,27 @@ public final class LanguageSync {
         }
         return true;
     }
-    /** A language that arrived while a world was loading; switching then never finishes (see {@link #followLanguage}). */
+    /** A language that arrived while a resource reload was running; applied once it is done (see {@link #followLanguage}). */
     public static String pendingLanguage;
-    /** Background: a language switch is running or waiting, so it opens no world until it is done. */
-    public static boolean languageBusy() { return languageReloading || pendingLanguage!=null; }
-    /** Owner: switches to the primary's language, then sends a fresh catalogue so names and tabs follow. */
+    /** Background: a language switch is waiting, so it opens no world until it is done. */
+    public static boolean languageBusy() { return pendingLanguage!=null; }
+    /**
+     * Owner, client thread: switches to the primary's language, then sends a fresh catalogue so names and tabs follow.
+     * Only the language is reloaded (what vanilla's own reload does for it), synchronously: the full resource reload
+     * used before also rebuilt fonts and atlases, and in a joined world the NeoForge background then crashed seconds
+     * later drawing text with a font image the reload had freed ("Image is not allocated", 2026-11-09 and 11-16). It
+     * also could not run while a world loaded. Text in another language needs no other resources: a font follows the
+     * font options, not the language.
+     */
     public static void followLanguage(Minecraft mc,String code,String primaryId) {
-        if(code==null || languageReloading || code.equals(mc.options.languageCode) || mc.getLanguageManager().getLanguage(code)==null) { pendingLanguage=null; return; }
-        // A resource reload started while a world loads never completes, and the world load waits for it: the client
-        // would never join its own server. Only the title screen and a joined world are safe.
-        boolean settled=mc.level==null ? mc.screen instanceof net.minecraft.client.gui.screens.TitleScreen
-            : mc.player!=null && !(mc.screen instanceof net.minecraft.client.gui.screens.ReceivingLevelScreen);
-        if(!settled) { pendingLanguage=code; return; }
+        if(code==null || code.equals(mc.options.languageCode) || mc.getLanguageManager().getLanguage(code)==null) { pendingLanguage=null; return; }
+        // A running resource reload (startup, a pack change) loads the language itself as it ends: wait for it.
+        if(mc.getOverlay()!=null) { pendingLanguage=code; return; }
         pendingLanguage=null;
         MmlfLog.info("connection","language_follow",Map.of("from",mc.options.languageCode,"to",code));
-        languageReloading=true;
         mc.getLanguageManager().setSelected(code); mc.options.languageCode=code;
-        mc.reloadResourcePacks().whenComplete((ok,error)->mc.execute(()->{
-            languageReloading=false;
-            if(error!=null) { MmlfLog.error("connection","language_reload_failed",Map.of("exception",error.toString())); return; }
-            languageChanged.accept(primaryId);
-        }));
+        try { mc.getLanguageManager().onResourceManagerReload(mc.getResourceManager()); }
+        catch(RuntimeException error) { MmlfLog.error("connection","language_reload_failed",Map.of("exception",error.toString())); return; }
+        languageChanged.accept(primaryId);
     }
 }

@@ -546,7 +546,9 @@ public final class GeometryLayer {
   Map.entry("armor_cutout_no_cull",RenderType::armorCutoutNoCull),Map.entry("armor_decal_cutout_no_cull",RenderType::createArmorDecalCutoutNoCull),
   Map.entry("text",RenderType::text),Map.entry("text_intensity",RenderType::textIntensity),Map.entry("text_polygon_offset",RenderType::textPolygonOffset),
   Map.entry("text_intensity_polygon_offset",RenderType::textIntensityPolygonOffset),Map.entry("text_see_through",RenderType::textSeeThrough),
-  Map.entry("text_intensity_see_through",RenderType::textIntensitySeeThrough));
+  Map.entry("text_intensity_see_through",RenderType::textIntensitySeeThrough),
+  // The beacon beam: its core is opaque, its outer layer blends without writing depth (DynamicCapture names it).
+  Map.entry("beacon_beam",location->RenderType.beaconBeam(location,false)),Map.entry("beacon_beam_translucent",location->RenderType.beaconBeam(location,true)));
  private static final Map<String,Supplier<RenderType>> UNTEXTURED=Map.ofEntries(
   Map.entry("lines",RenderType::lines),Map.entry("line_strip",RenderType::lineStrip),Map.entry("leash",RenderType::leash),
   Map.entry("lightning",RenderType::lightning),Map.entry("water_mask",RenderType::waterMask),Map.entry("glint",RenderType::glint),

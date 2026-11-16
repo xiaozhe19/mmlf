@@ -247,6 +247,10 @@ public final class BridgeEntry {
         r.on("player_own",ON_PRIMARY,m->OwnEffects.receive(m.source(),m.body(dev.mmlf.common.PlayerShare.OwnEffects.class)));
         r.on("player",ON_BACKGROUND_FROM_PRIMARY,m->PlayerFollower.followPlayer(Minecraft.getInstance(),m.body(PlayerState.class)));
         r.onEvent("mmlf:play",ON_BACKGROUND_FROM_PRIMARY,(m,e)->PlayerFollower.followPlay(Minecraft.getInstance(),e.values()));
+        r.onEvent("mmlf:mob_counts",ANY,(m,e)->dev.mmlf.bridge.collab.MobSpawning.receiveCounts(e.values()));
+        r.onEvent("mmlf:spawn_weights",ON_PRIMARY,(m,e)->dev.mmlf.bridge.collab.MobSpawning.receiveWeights(e.values()));
+        r.onEvent("mmlf:player_stuck",ON_PRIMARY,(m,e)->dev.mmlf.bridge.collab.StandInFeel.receiveStuck(e.values()));
+        r.onEvent("mmlf:stand_in_sound",ON_BACKGROUND_FROM_PRIMARY,(m,e)->dev.mmlf.bridge.collab.StandInFeel.playForPrimary(e.values()));
         r.onEvent("mmlf:player_cure",ON_BACKGROUND_FROM_PRIMARY,(m,e)->OwnEffects.cured(e.values().get("cure")));
         r.onEvent("mmlf:tick",ON_BACKGROUND_FROM_PRIMARY,(m,e)->{ try { TickSync.permit(Long.parseLong(e.values().get("tick"))); } catch(RuntimeException ignored) { } });
         r.onEvent("mmlf:language",ON_BACKGROUND_FROM_PRIMARY,(m,e)->{
@@ -359,6 +363,7 @@ public final class BridgeEntry {
         if(releaseRuntime!=null) joinRelease(mc);
         WorldClock.tick(mc);
         OwnEffects.clientTick(mc);
+        dev.mmlf.bridge.collab.StandInFeel.clientTick(mc);
         if(Experiments.GEOMETRY) dev.mmlf.bridge.render.GeometryLayer.tick(mc);
         if(SessionLink.joined() && SessionLink.isPrimary() && !SessionStatus.failed() && ++remoteErrorTick%20==0) {
             Path error=SessionLink.session().root().resolve("remote-error.txt");

@@ -18,7 +18,7 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
 
 /**
  * Hollow worlds ({@link SharedWorld#hollow}): a background that reads the primary's map computes none of it. Its chunks
- * still go through every status, but biomes, surface, carvers and initial mobs do nothing. These are the status tasks,
+ * still go through every status, but biomes, surface and carvers do nothing; initial mobs are only its mods' ones. These are the status tasks,
  * not the generator's methods, so every dimension and every generator (mods' too) is covered.
  * <p>
  * With co-generation ({@link CoGeneration}) the terrain step takes the primary's blocks and biomes, and the decoration
@@ -27,9 +27,14 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
  */
 @Mixin(ChunkStatusTasks.class)
 public abstract class HollowGenerationMixin {
-    @Inject(method={"generateBiomes","generateSurface","generateCarvers","generateSpawn"},at=@At("HEAD"),cancellable=true)
+    @Inject(method={"generateBiomes","generateSurface","generateCarvers"},at=@At("HEAD"),cancellable=true)
     private static void mmlf$hollow(WorldGenContext context,ChunkStep step,StaticCache2D<GenerationChunkHolder> cache,ChunkAccess chunk,CallbackInfoReturnable<CompletableFuture<ChunkAccess>> cir) {
         if(SharedWorld.hollow()) cir.setReturnValue(CompletableFuture.completedFuture(chunk));
+    }
+    /** Initial mobs: only this runtime's mods' creatures, once the chunk holds the primary's terrain ({@link dev.mmlf.bridge.collab.MobSpawning}). */
+    @Inject(method="generateSpawn",at=@At("HEAD"),cancellable=true)
+    private static void mmlf$hollowSpawn(WorldGenContext context,ChunkStep step,StaticCache2D<GenerationChunkHolder> cache,ChunkAccess chunk,CallbackInfoReturnable<CompletableFuture<ChunkAccess>> cir) {
+        if(SharedWorld.hollow() && !dev.mmlf.bridge.collab.MobSpawning.generationSpawns()) cir.setReturnValue(CompletableFuture.completedFuture(chunk));
     }
     @Inject(method="generateNoise",at=@At("HEAD"),cancellable=true)
     private static void mmlf$terrain(WorldGenContext context,ChunkStep step,StaticCache2D<GenerationChunkHolder> cache,ChunkAccess chunk,CallbackInfoReturnable<CompletableFuture<ChunkAccess>> cir) {

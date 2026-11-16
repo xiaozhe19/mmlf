@@ -16,7 +16,7 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
 
 @Mixin(targets="net.minecraft.client.renderer.chunk.SectionRenderDispatcher$RenderSection$RebuildTask")
-public abstract class TerrainRebuildTaskMixin {
+public abstract class TerrainRebuildTaskMixin implements dev.mmlf.bridge.render.TerrainTaskTracking {
     @Shadow protected RenderChunkRegion region;
     @Unique private SectionRenderDispatcher.RenderSection mmlf$renderSection;
     @Unique private BlockPos mmlf$origin;
@@ -24,6 +24,10 @@ public abstract class TerrainRebuildTaskMixin {
     @Unique private boolean mmlf$hasRegion;
     @Inject(method="<init>",at=@At("TAIL"))
     private void mmlf$init(SectionRenderDispatcher.RenderSection section,double distance,RenderChunkRegion region,boolean priority,CallbackInfo ci) {
+        mmlf$track(section);
+    }
+    /** Also called by a loader's own mixin for the constructor it builds tasks with ({@link TerrainTaskTracking}). */
+    @Override public void mmlf$track(SectionRenderDispatcher.RenderSection section) {
         mmlf$renderSection=section; mmlf$origin=section.getOrigin().immutable();
     }
     @Inject(method="doTask",at=@At("HEAD"))
@@ -32,8 +36,9 @@ public abstract class TerrainRebuildTaskMixin {
     }
     @Inject(method="doTask",at=@At("RETURN"))
     private void mmlf$done(SectionBufferBuilderPack buffers,CallbackInfoReturnable<CompletableFuture<?>> cir) {
-        if(!mmlf$hasRegion) return;
         long version=mmlf$version; BlockPos origin=mmlf$origin; var section=mmlf$renderSection;
+        if(!mmlf$hasRegion) return;
+        if(origin==null || section==null) { dev.mmlf.common.MmlfLog.sampled("render.submission","terrain_task_untracked",60000,java.util.Map.of()); return; }
         cir.getReturnValue().thenAccept(result->{
             if(result instanceof Enum<?> value && value.name().equals("SUCCESSFUL") && origin.equals(section.getOrigin()))
                 TerrainMeshes.uploaded(SectionPos.of(origin).asLong(),version);

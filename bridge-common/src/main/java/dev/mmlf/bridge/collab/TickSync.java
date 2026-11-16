@@ -48,6 +48,7 @@ public final class TickSync {
         // Every runtime publishes its boundary once per server tick, after the tick's changes and before any permit.
         RedstoneBridge.tick(server);
         SharedPlayer.endOfTick(server);
+        MobSpawning.endOfTick(server);
         diagnosticsAfter.accept(server);
         if(!enabled()) return;
         if(SessionLink.isPrimary()) SessionLink.send("event","*",new Event("mmlf:tick",Map.of("tick",Long.toString(server.getTickCount()))));

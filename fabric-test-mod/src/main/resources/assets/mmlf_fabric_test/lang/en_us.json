@@ -1,5 +1,14 @@
 {
   "block.mmlf_fabric_test.demo_block": "MMLF Fabric Demo Block",
   "block.mmlf_fabric_test.gui_block": "MMLF Test Screen Block",
-  "block.mmlf_fabric_test.box_block": "MMLF Test Box"
+  "block.mmlf_fabric_test.box_block": "MMLF Test Box",
+  "block.mmlf_fabric_test.slippery_block": "MMLF Fabric Slippery",
+  "block.mmlf_fabric_test.slow_block": "MMLF Fabric Slow",
+  "block.mmlf_fabric_test.bouncy_block": "MMLF Fabric Bouncy (slime subclass)",
+  "block.mmlf_fabric_test.springy_block": "MMLF Fabric Springy (custom code)",
+  "block.mmlf_fabric_test.chime_block": "MMLF Fabric Chime (own sounds)",
+  "block.mmlf_fabric_test.sticky_block": "MMLF Fabric Sticky (custom code)",
+  "entity.mmlf_fabric_test.test_cow": "MMLF Fabric Cow",
+  "entity.mmlf_fabric_test.test_zombie": "MMLF Fabric Zombie",
+  "subtitles.mmlf_fabric_test.chime": "MMLF Fabric chime"
 }

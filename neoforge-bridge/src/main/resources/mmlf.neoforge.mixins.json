@@ -1,1 +1,1 @@
-{"required":true,"package":"dev.mmlf.neoforge.mixin","compatibilityLevel":"JAVA_21","client":["NativeBlockFilterMixin","PrimaryEffectCureMixin"]}
+{"required":true,"package":"dev.mmlf.neoforge.mixin","compatibilityLevel":"JAVA_21","client":["NativeBlockFilterMixin","PrimaryEffectCureMixin","NeoForgeRebuildTaskMixin"]}
